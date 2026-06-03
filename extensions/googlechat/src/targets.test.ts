@@ -1,6 +1,10 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
+import {
+  clearGoogleChatApprovalCardBindingsForTest,
+  registerGoogleChatManualApprovalFollowupSuppression,
+} from "./approval-card-actions.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import {
   isGoogleChatSpaceTarget,
@@ -170,6 +174,7 @@ describe("googlechat group policy", () => {
 
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
+    clearGoogleChatApprovalCardBindingsForTest();
     authTesting.resetGoogleChatAuthForTests();
     mocks.fetchWithSsrFGuard.mockClear();
     vi.unstubAllGlobals();
@@ -296,6 +301,24 @@ describe("sendGoogleChatMessage", () => {
       text: "Approval required",
       cardsV2,
     });
+  });
+
+  it("suppresses text-only duplicate manual approval follow-ups at the API send boundary", async () => {
+    registerGoogleChatManualApprovalFollowupSuppression({
+      approvalId: "12345678-1234-1234-1234-123456789012",
+      approvalKind: "exec",
+      allowedDecisions: ["allow-once", "deny"],
+      expiresAtMs: Date.now() + 60_000,
+    });
+
+    const result = await sendGoogleChatMessage({
+      account,
+      space: "spaces/AAA",
+      text: "Please reply with:\n/approve 12345678 allow-once",
+    });
+
+    expect(result).toBeNull();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
   it("reports malformed send JSON with a stable API error", async () => {

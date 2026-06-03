@@ -20,7 +20,9 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shouldSuppressGoogleChatManualExecApprovalFollowupPayload } from "./approval-card-actions.js";
 import { formatGoogleChatAllowFromEntry } from "./channel-base.js";
 import {
   type ResolvedGoogleChatAccount,
@@ -194,6 +196,8 @@ export const googlechatOutboundAdapter = {
     chunkerMode: "markdown" as const,
     textChunkLimit: 4000,
     sanitizeText: ({ text }: { text: string }) => sanitizeForPlainText(text),
+    normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
+      shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload) ? null : payload,
     resolveTarget: ({ to }: { to?: string }) => {
       const trimmed = normalizeOptionalString(to) ?? "";
 
