@@ -348,8 +348,8 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-pairing-block",
-    standardId: "allowlist-block",
     title: "WhatsApp non-allowlisted DM gets pairing gate",
+    defaultProviderModes: ["live-frontier", "mock-openai"],
     timeoutMs: 20_000,
     buildRun: () => ({
       configMode: "pairing",
@@ -1200,6 +1200,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-group-allowlist-block",
+    standardId: "allowlist-block",
     title: "WhatsApp group outside allowlist stays quiet",
     timeoutMs: 8_000,
     configOverrides: {

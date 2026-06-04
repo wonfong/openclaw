@@ -163,12 +163,12 @@ describe("WhatsApp QA live runtime", () => {
   it("reports standard WhatsApp live transport scenario coverage", () => {
     expect(testing.WHATSAPP_QA_STANDARD_SCENARIO_IDS).toEqual([
       "canary",
-      "allowlist-block",
       "mention-gating",
       "top-level-reply-shape",
       "restart-resume",
       "help-command",
       "reaction-observation",
+      "allowlist-block",
     ]);
   });
 
@@ -181,6 +181,7 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-restart-resume",
       "whatsapp-help-command",
       "whatsapp-status-reactions",
+      "whatsapp-group-allowlist-block",
     ];
 
     expect(testing.findScenarios(undefined, "live-frontier").map(({ id }) => id)).toEqual(
@@ -221,6 +222,7 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-stream-final-message-accounting",
       "whatsapp-native-new-command",
       "whatsapp-status-reactions",
+      "whatsapp-group-allowlist-block",
     ]);
   });
 

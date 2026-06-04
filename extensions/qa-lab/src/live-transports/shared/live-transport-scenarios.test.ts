@@ -107,6 +107,10 @@ describe("live transport scenario helpers", () => {
       standardId: "thread-follow-up",
       scenarioId: "slack-thread-follow-up",
     });
+    expect(lanes.find((lane) => lane.transportId === "whatsapp")?.members).toContainEqual({
+      standardId: "allowlist-block",
+      scenarioId: "whatsapp-group-allowlist-block",
+    });
     expect(
       lanes.find((lane) => lane.transportId === "discord")?.baselineMissingStandardScenarioIds,
     ).toEqual(["allowlist-block", "top-level-reply-shape", "restart-resume"]);

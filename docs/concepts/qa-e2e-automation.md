@@ -730,10 +730,9 @@ Scenarios (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime
   the same pending/resolved native WhatsApp path.
 
 The WhatsApp QA driver observes structured live events (`text`, `media`,
-`reaction`, and `poll`) and redacts message content by default. Outbound
-upload-file and poll-send coverage still need a deterministic gateway action
-entrypoint before they should become live WhatsApp scenarios; model-prompt-only
-tool invocation would not be stable enough for this lane.
+`reaction`, and `poll`) and redacts message content by default. Outbound poll
+and upload-file coverage run through deterministic gateway `poll` and
+`message.action` calls instead of model-prompt-only tool invocation.
 
 Output artifacts:
 
