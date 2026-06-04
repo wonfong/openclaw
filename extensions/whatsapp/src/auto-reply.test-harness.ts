@@ -27,9 +27,12 @@ type MockWebListener = {
   close: () => Promise<void>;
   onClose: Promise<WebListenerCloseReason>;
   signalClose: () => void;
+  sendContact: () => Promise<WhatsAppSendResult>;
+  sendLocation: () => Promise<WhatsAppSendResult>;
   sendMessage: () => Promise<WhatsAppSendResult>;
   sendPoll: () => Promise<WhatsAppSendResult>;
   sendReaction: () => Promise<WhatsAppSendResult>;
+  sendSticker: () => Promise<WhatsAppSendResult>;
   sendComposingTo: () => Promise<void>;
 };
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -261,9 +264,12 @@ export function createMockWebListener(): MockWebListener {
     close: vi.fn(async () => undefined),
     onClose: new Promise<WebListenerCloseReason>(() => {}),
     signalClose: vi.fn(),
+    sendContact: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "contact-1")),
+    sendLocation: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "location-1")),
     sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg-1")),
     sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll-1")),
     sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", "reaction-1")),
+    sendSticker: vi.fn(async () => createAcceptedWhatsAppSendResult("media", "sticker-1")),
     sendComposingTo: vi.fn(async () => undefined),
   };
 }
