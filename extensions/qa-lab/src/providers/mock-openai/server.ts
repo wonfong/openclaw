@@ -175,6 +175,8 @@ const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small projec
 const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
+const QA_AUDIO_TRANSCRIPTION_TEXT =
+  "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
@@ -3092,6 +3094,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
             { id: "gpt-5.5", object: "model" },
             { id: "gpt-5.5-alt", object: "model" },
             { id: "gpt-image-1", object: "model" },
+            { id: "gpt-4o-transcribe", object: "model" },
             { id: "text-embedding-3-small", object: "model" },
             { id: "claude-opus-4-8", object: "model" },
             { id: "claude-sonnet-4-6", object: "model" },
@@ -3125,6 +3128,13 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
               revised_prompt: "A QA lighthouse with protocol droid silhouette.",
             },
           ],
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/v1/audio/transcriptions") {
+        await readBody(req);
+        writeJson(res, 200, {
+          text: QA_AUDIO_TRANSCRIPTION_TEXT,
         });
         return;
       }

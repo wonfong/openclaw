@@ -20,6 +20,7 @@ import { fingerprintQaCredentialId } from "../../qa-credentials-fingerprint.runt
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
+  type QaProviderMode,
   type QaProviderModeInput,
 } from "../../run-config.js";
 import {
@@ -50,6 +51,7 @@ export type WhatsAppQaRuntimeEnv = {
 
 type WhatsAppQaScenarioId =
   | "whatsapp-approval-exec-reaction-native"
+  | "whatsapp-audio-preflight"
   | "whatsapp-canary"
   | "whatsapp-group-allowlist-block"
   | "whatsapp-help-command"
@@ -122,6 +124,7 @@ type WhatsAppQaApprovalScenarioRun = {
 type WhatsAppQaScenarioRun = WhatsAppQaApprovalScenarioRun | WhatsAppQaMessageScenarioRun;
 
 type WhatsAppQaConfigOverrides = {
+  audioPreflight?: boolean;
   approvals?: {
     exec?: boolean;
     plugin?: boolean;
@@ -134,7 +137,10 @@ type WhatsAppQaConfigOverrides = {
 type WhatsAppQaScenarioDefinition = LiveTransportScenarioDefinition<WhatsAppQaScenarioId> & {
   buildRun: () => WhatsAppQaScenarioRun;
   configOverrides?: WhatsAppQaConfigOverrides;
+  defaultEnabled?: boolean;
+  defaultProviderModes?: readonly QaProviderMode[];
   requiresGroupJid?: boolean;
+  requiredPluginIds?: readonly string[];
 };
 
 type WhatsAppQaGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
@@ -234,6 +240,31 @@ const WHATSAPP_QA_ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lzK4ZQAAAABJRU5ErkJggg==",
   "base64",
 );
+const WHATSAPP_QA_AUDIO_TRANSCRIPT_MARKER = "WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
+
+function createWhatsAppQaAudioWavBuffer() {
+  const sampleRate = 16_000;
+  const channelCount = 1;
+  const bitsPerSample = 16;
+  const durationSeconds = 1;
+  const bytesPerSample = bitsPerSample / 8;
+  const dataBytes = sampleRate * durationSeconds * channelCount * bytesPerSample;
+  const buffer = Buffer.alloc(44 + dataBytes);
+  buffer.write("RIFF", 0, "ascii");
+  buffer.writeUInt32LE(36 + dataBytes, 4);
+  buffer.write("WAVE", 8, "ascii");
+  buffer.write("fmt ", 12, "ascii");
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(channelCount, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate * channelCount * bytesPerSample, 28);
+  buffer.writeUInt16LE(channelCount * bytesPerSample, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write("data", 36, "ascii");
+  buffer.writeUInt32LE(dataBytes, 40);
+  return buffer;
+}
 
 const whatsappQaCredentialPayloadSchema = z.object({
   driverPhoneE164: z.string().trim().min(1),
@@ -407,6 +438,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-inbound-image-caption",
     title: "WhatsApp inbound image caption reaches the agent",
+    defaultProviderModes: ["mock-openai"],
     timeoutMs: 60_000,
     buildRun: () => {
       const token = `WHATSAPP_QA_IMAGE_${randomUUID().slice(0, 8).toUpperCase()}`;
@@ -424,6 +456,29 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
         target: "dm",
       };
     },
+  },
+  {
+    id: "whatsapp-audio-preflight",
+    title: "WhatsApp inbound audio preflight transcript reaches the agent",
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 90_000,
+    configOverrides: {
+      audioPreflight: true,
+    },
+    requiredPluginIds: ["openai"],
+    buildRun: () => ({
+      configMode: "allowlist",
+      expectReply: true,
+      input: "",
+      matchText: WHATSAPP_QA_AUDIO_TRANSCRIPT_MARKER,
+      sendMode: {
+        fileName: "whatsapp-qa-audio.wav",
+        kind: "media",
+        mediaBuffer: createWhatsAppQaAudioWavBuffer(),
+        mediaType: "audio/wav",
+      },
+      target: "dm",
+    }),
   },
   {
     id: "whatsapp-status-reactions",
@@ -620,12 +675,29 @@ function parseWhatsAppQaCredentialPayload(payload: unknown): WhatsAppQaRuntimeEn
   return validateWhatsAppQaRuntimeEnv(parsed, "WhatsApp credential payload");
 }
 
-function defaultWhatsAppQaScenarios() {
-  return WHATSAPP_QA_SCENARIOS.filter((scenario) => scenario.standardId);
+function shouldRunWhatsAppScenarioByDefault(
+  scenario: WhatsAppQaScenarioDefinition,
+  providerMode: QaProviderMode,
+) {
+  if (scenario.defaultEnabled === false) {
+    return false;
+  }
+  if (scenario.standardId) {
+    return true;
+  }
+  return Boolean(scenario.defaultProviderModes?.includes(providerMode));
 }
 
-function findScenarios(ids?: string[]) {
-  const scenarios = ids && ids.length > 0 ? WHATSAPP_QA_SCENARIOS : defaultWhatsAppQaScenarios();
+function findScenarios(
+  ids?: string[],
+  providerMode: QaProviderMode = DEFAULT_QA_LIVE_PROVIDER_MODE,
+) {
+  const scenarios =
+    ids && ids.length > 0
+      ? WHATSAPP_QA_SCENARIOS
+      : WHATSAPP_QA_SCENARIOS.filter((scenario) =>
+          shouldRunWhatsAppScenarioByDefault(scenario, providerMode),
+        );
   return selectLiveTransportScenarios({
     ids,
     laneLabel: "WhatsApp",
@@ -647,6 +719,26 @@ function buildWhatsAppQaConfig(
   const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "whatsapp"]);
   const approvalOverrides = params.overrides?.approvals;
   const groupPolicy = params.overrides?.groupPolicy ?? "open";
+  const audioPreflightConfig = params.overrides?.audioPreflight
+    ? {
+        tools: {
+          ...baseCfg.tools,
+          media: {
+            ...baseCfg.tools?.media,
+            audio: {
+              ...baseCfg.tools?.media?.audio,
+              enabled: true,
+              models: [
+                {
+                  provider: "openai",
+                  model: "gpt-4o-transcribe",
+                },
+              ],
+            },
+          },
+        },
+      }
+    : {};
   const approvalForwardingConfig =
     approvalOverrides?.exec || approvalOverrides?.plugin
       ? {
@@ -676,6 +768,7 @@ function buildWhatsAppQaConfig(
   return {
     ...baseCfg,
     ...approvalForwardingConfig,
+    ...audioPreflightConfig,
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
@@ -1246,7 +1339,7 @@ async function runWhatsAppScenario(params: {
   const gatewayHarness = await startQaLiveLaneGateway({
     repoRoot: params.repoRoot,
     transport: {
-      requiredPluginIds: [],
+      requiredPluginIds: params.scenario.requiredPluginIds ?? [],
       createGatewayConfig: () => ({}),
     },
     transportBaseUrl: "http://127.0.0.1:0",
@@ -1563,7 +1656,7 @@ export async function runWhatsAppQaLive(params: {
   const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
   const sutAccountId = params.sutAccountId?.trim() || "sut";
-  const scenarios = findScenarios(params.scenarioIds);
+  const scenarios = findScenarios(params.scenarioIds, providerMode);
   const explicitScenarioSelection = (params.scenarioIds?.length ?? 0) > 0;
   const requestedCredentialSource = inferWhatsAppCredentialSource(params.credentialSource);
   const requestedCredentialRole = inferWhatsAppCredentialRole(params.credentialRole);

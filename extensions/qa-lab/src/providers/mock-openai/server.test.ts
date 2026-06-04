@@ -3481,6 +3481,30 @@ describe("qa mock openai server", () => {
     const ids = body.data.map((entry) => entry.id);
     expect(ids).toContain("claude-opus-4-8");
     expect(ids).toContain("gpt-5.5");
+    expect(ids).toContain("gpt-4o-transcribe");
+  });
+
+  it("serves deterministic OpenAI-compatible audio transcription responses", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        "content-type": "multipart/form-data; boundary=qa",
+      },
+      body: "--qa\r\n--qa--\r\n",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      text: "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK",
+    });
   });
 
   it("dispatches an Anthropic /v1/messages read tool call for source discovery prompts", async () => {

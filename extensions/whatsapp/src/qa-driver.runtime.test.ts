@@ -68,6 +68,21 @@ function incomingImageMessage(remoteJid: string, text: string): WAMessage {
   } as WAMessage;
 }
 
+function incomingAudioMessage(remoteJid: string): WAMessage {
+  return {
+    key: {
+      fromMe: false,
+      id: "audio-1",
+      remoteJid,
+    },
+    message: {
+      audioMessage: {
+        mimetype: "audio/ogg; codecs=opus",
+      },
+    },
+  } as WAMessage;
+}
+
 function incomingReactionMessage(remoteJid: string): WAMessage {
   return {
     key: {
@@ -169,6 +184,30 @@ describe("startWhatsAppQaDriverSession", () => {
       kind: "media",
       mediaType: "image/png",
       text: "image caption",
+    });
+
+    await session.close();
+  });
+
+  it("observes audio media messages without requiring a text body", async () => {
+    const sock = createMockSocket();
+    mocks.createWaSocket.mockResolvedValue(sock);
+    mocks.waitForWaConnection.mockResolvedValue(undefined);
+    mocks.jidToE164.mockReturnValue("+15551234567");
+
+    const session = await startWhatsAppQaDriverSession({
+      authDir: "/tmp/openclaw-whatsapp-auth",
+    });
+
+    sock.ev.emit("messages.upsert", {
+      messages: [incomingAudioMessage("12345@lid")],
+    });
+
+    expect(session.getObservedMessages()[0]).toMatchObject({
+      hasMedia: true,
+      kind: "media",
+      mediaType: "audio/ogg; codecs=opus",
+      text: "",
     });
 
     await session.close();

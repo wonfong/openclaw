@@ -702,12 +702,19 @@ Scenarios (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime
 - `whatsapp-restart-resume`
 - `whatsapp-help-command`
 - `whatsapp-status-reactions`
+- `whatsapp-inbound-image-caption` - included in the default `mock-openai` set
+  and selectable by id in any provider mode. Sends a real image message with a
+  caption and verifies the caption reaches the agent.
+- `whatsapp-audio-preflight` - included in the default `mock-openai` set and
+  selectable by id. Sends a real audio message, enables WhatsApp audio
+  preflight through the OpenAI media-understanding provider, and verifies the
+  deterministic mock transcription reaches the agent. It is mock-backed because
+  generated silent fixture audio is not a reliable real-provider speech-to-text
+  assertion.
 - `whatsapp-status-command` - opt-in command scenario for `/status`.
 - `whatsapp-reply-to-message` - opt-in reply-to scenario. Enables
   `replyToMode=all` and verifies the SUT WhatsApp reply quotes the triggering
   driver message.
-- `whatsapp-inbound-image-caption` - opt-in inbound media scenario. Sends a
-  real image message with a caption and verifies the caption reaches the agent.
 - `whatsapp-group-allowlist-block` - opt-in group access-control scenario.
   Requires `OPENCLAW_QA_WHATSAPP_GROUP_JID` and verifies a group outside the
   configured allowlist stays quiet.

@@ -172,7 +172,7 @@ describe("WhatsApp QA live runtime", () => {
     ]);
   });
 
-  it("keeps native approval scenarios out of default WhatsApp selection", () => {
+  it("keeps mock-backed and native approval scenarios out of default live-frontier selection", () => {
     const expectedDefaultIds = [
       "whatsapp-canary",
       "whatsapp-pairing-block",
@@ -183,8 +183,26 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-status-reactions",
     ];
 
-    expect(testing.findScenarios().map(({ id }) => id)).toEqual(expectedDefaultIds);
-    expect(testing.findScenarios([]).map(({ id }) => id)).toEqual(expectedDefaultIds);
+    expect(testing.findScenarios(undefined, "live-frontier").map(({ id }) => id)).toEqual(
+      expectedDefaultIds,
+    );
+    expect(testing.findScenarios([], "live-frontier").map(({ id }) => id)).toEqual(
+      expectedDefaultIds,
+    );
+  });
+
+  it("adds deterministic audio preflight to the default mock-openai WhatsApp selection", () => {
+    expect(testing.findScenarios(undefined, "mock-openai").map(({ id }) => id)).toEqual([
+      "whatsapp-canary",
+      "whatsapp-pairing-block",
+      "whatsapp-mention-gating",
+      "whatsapp-top-level-reply-shape",
+      "whatsapp-restart-resume",
+      "whatsapp-help-command",
+      "whatsapp-inbound-image-caption",
+      "whatsapp-audio-preflight",
+      "whatsapp-status-reactions",
+    ]);
   });
 
   it("selects native approval scenarios by id without changing standard coverage", () => {
@@ -234,6 +252,48 @@ describe("WhatsApp QA live runtime", () => {
     const account = cfg.channels?.whatsapp?.accounts?.sut;
     expect(account?.allowFrom).toEqual(["+15550000001"]);
     expect(account).not.toHaveProperty("execApprovals");
+  });
+
+  it("enables WhatsApp audio preflight with the OpenAI transcription provider", () => {
+    const cfg = testing.buildWhatsAppQaConfig(
+      {},
+      {
+        allowFrom: ["+15550000001"],
+        authDir: "/tmp/openclaw-whatsapp-qa-auth",
+        dmPolicy: "allowlist",
+        overrides: {
+          audioPreflight: true,
+        },
+        sutAccountId: "sut",
+      },
+    );
+
+    expect(cfg.plugins?.allow).toContain("whatsapp");
+    expect(cfg.tools?.media?.audio).toEqual({
+      enabled: true,
+      models: [{ provider: "openai", model: "gpt-4o-transcribe" }],
+    });
+  });
+
+  it("defines the WhatsApp audio preflight scenario as mock-backed audio media", () => {
+    const [scenario] = testing.findScenarios(["whatsapp-audio-preflight"]);
+    const scenarioRun = scenario.buildRun();
+    if (scenarioRun.kind === "approval") {
+      throw new Error("whatsapp-audio-preflight unexpectedly built an approval scenario run");
+    }
+
+    expect(scenario.requiredPluginIds).toEqual(["openai"]);
+    expect(scenario.defaultProviderModes).toEqual(["mock-openai"]);
+    expect(scenarioRun.expectReply).toBe(true);
+    expect(scenarioRun.matchText).toBe("WHATSAPP_QA_AUDIO_TRANSCRIPT_OK");
+    expect(scenarioRun.sendMode).toMatchObject({
+      fileName: "whatsapp-qa-audio.wav",
+      kind: "media",
+      mediaType: "audio/wav",
+    });
+    expect(scenarioRun.sendMode?.kind === "media" && scenarioRun.sendMode.mediaBuffer.length).toBe(
+      32_044,
+    );
   });
 
   it("applies WhatsApp QA config overrides for reply mode and status reactions", () => {
