@@ -110,6 +110,9 @@ describe("live transport scenario helpers", () => {
     expect(
       lanes.find((lane) => lane.transportId === "discord")?.baselineMissingStandardScenarioIds,
     ).toEqual(["allowlist-block", "top-level-reply-shape", "restart-resume"]);
+    expect(
+      lanes.find((lane) => lane.transportId === "whatsapp")?.baselineMissingStandardScenarioIds,
+    ).toEqual([]);
   });
 
   it("keeps coverage report lane summaries aligned with runtime lanes", () => {

@@ -55,6 +55,7 @@ describe("WhatsApp QA live runtime", () => {
           {
             fromJid: "15550000002@s.whatsapp.net",
             fromPhoneE164: "+15550000002",
+            kind: "text",
             matchedScenario: true,
             messageId: "msg-1",
             observedAt: "2026-05-04T12:00:00.000Z",
@@ -66,6 +67,7 @@ describe("WhatsApp QA live runtime", () => {
       }),
     ).toEqual([
       {
+        kind: "text",
         matchedScenario: true,
         observedAt: "2026-05-04T12:00:00.000Z",
         scenarioId: "whatsapp-canary",
@@ -82,6 +84,7 @@ describe("WhatsApp QA live runtime", () => {
         messages: [
           {
             fromPhoneE164: "+15550000002",
+            kind: "text",
             observedAt: "2026-05-04T12:00:00.000Z",
             text: "captured body",
           },
@@ -89,6 +92,7 @@ describe("WhatsApp QA live runtime", () => {
       }),
     ).toEqual([
       {
+        kind: "text",
         observedAt: "2026-05-04T12:00:00.000Z",
         text: "captured body",
       },
@@ -161,6 +165,10 @@ describe("WhatsApp QA live runtime", () => {
       "canary",
       "allowlist-block",
       "mention-gating",
+      "top-level-reply-shape",
+      "restart-resume",
+      "help-command",
+      "reaction-observation",
     ]);
   });
 
@@ -169,6 +177,10 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-canary",
       "whatsapp-pairing-block",
       "whatsapp-mention-gating",
+      "whatsapp-top-level-reply-shape",
+      "whatsapp-restart-resume",
+      "whatsapp-help-command",
+      "whatsapp-status-reactions",
     ];
 
     expect(testing.findScenarios().map(({ id }) => id)).toEqual(expectedDefaultIds);
@@ -178,17 +190,26 @@ describe("WhatsApp QA live runtime", () => {
   it("selects native approval scenarios by id without changing standard coverage", () => {
     const scenarios = testing.findScenarios([
       "whatsapp-approval-exec-native",
+      "whatsapp-approval-exec-reaction-native",
       "whatsapp-approval-plugin-native",
     ]);
 
     expect(scenarios.map(({ id }) => id)).toEqual([
       "whatsapp-approval-exec-native",
+      "whatsapp-approval-exec-reaction-native",
       "whatsapp-approval-plugin-native",
     ]);
     expect(testing.WHATSAPP_QA_STANDARD_SCENARIO_IDS).not.toContain(
       "whatsapp-approval-exec-native",
     );
-    expect(scenarios.map((scenario) => scenario.buildRun().kind)).toEqual(["approval", "approval"]);
+    expect(scenarios.map((scenario) => scenario.buildRun().kind)).toEqual([
+      "approval",
+      "approval",
+      "approval",
+    ]);
+    expect(scenarios[1]?.buildRun()).toMatchObject({
+      decisionMode: "reaction",
+    });
   });
 
   it("enables WhatsApp native exec and plugin approval delivery for approval scenarios", () => {
@@ -213,6 +234,45 @@ describe("WhatsApp QA live runtime", () => {
     const account = cfg.channels?.whatsapp?.accounts?.sut;
     expect(account?.allowFrom).toEqual(["+15550000001"]);
     expect(account).not.toHaveProperty("execApprovals");
+  });
+
+  it("applies WhatsApp QA config overrides for reply mode and status reactions", () => {
+    const cfg = testing.buildWhatsAppQaConfig(
+      {},
+      {
+        allowFrom: ["+15550000001"],
+        authDir: "/tmp/openclaw-whatsapp-qa-auth",
+        dmPolicy: "allowlist",
+        overrides: {
+          replyToMode: "all",
+          statusReactions: true,
+        },
+        sutAccountId: "sut",
+      },
+    );
+
+    expect(cfg.channels?.whatsapp?.accounts?.sut?.replyToMode).toBe("all");
+    expect(cfg.messages?.statusReactions?.enabled).toBe(true);
+  });
+
+  it("can configure a group scenario as allowlist-blocked instead of open mention-gated", () => {
+    const cfg = testing.buildWhatsAppQaConfig(
+      {},
+      {
+        allowFrom: ["+15550000001"],
+        authDir: "/tmp/openclaw-whatsapp-qa-auth",
+        dmPolicy: "allowlist",
+        groupJid: "120363000000000000@g.us",
+        overrides: {
+          groupPolicy: "allowlist",
+        },
+        sutAccountId: "sut",
+      },
+    );
+
+    const account = cfg.channels?.whatsapp?.accounts?.sut;
+    expect(account?.groupPolicy).toBe("allowlist");
+    expect(account?.groups).toBeUndefined();
   });
 
   it("matches native approval resolved text emitted by the WhatsApp approval handler", () => {

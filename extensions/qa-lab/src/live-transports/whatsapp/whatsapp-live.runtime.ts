@@ -3,7 +3,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { startWhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
+import {
+  startWhatsAppQaDriverSession,
+  type WhatsAppQaDriverObservedMessage,
+  type WhatsAppQaDriverSession,
+} from "@openclaw/whatsapp/api.js";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -45,16 +49,52 @@ export type WhatsAppQaRuntimeEnv = {
 };
 
 type WhatsAppQaScenarioId =
+  | "whatsapp-approval-exec-reaction-native"
   | "whatsapp-canary"
+  | "whatsapp-group-allowlist-block"
+  | "whatsapp-help-command"
+  | "whatsapp-inbound-image-caption"
   | "whatsapp-pairing-block"
   | "whatsapp-mention-gating"
+  | "whatsapp-reply-to-message"
+  | "whatsapp-restart-resume"
+  | "whatsapp-status-command"
+  | "whatsapp-status-reactions"
+  | "whatsapp-top-level-reply-shape"
   | "whatsapp-approval-exec-native"
   | "whatsapp-approval-plugin-native";
 
 type WhatsAppQaApprovalKind = "exec" | "plugin";
 type WhatsAppQaApprovalDecision = "allow-once";
+type WhatsAppQaApprovalDecisionMode = "reaction" | "rpc";
+
+type WhatsAppQaMessageSendMode =
+  | {
+      kind?: "text";
+    }
+  | {
+      fileName?: string;
+      kind: "media";
+      mediaBuffer: Buffer;
+      mediaType: string;
+    };
+
+type WhatsAppQaMessageScenarioContext = {
+  driver: WhatsAppQaDriverSession;
+  gateway: WhatsAppQaGateway;
+  sent: { messageId?: string };
+  sutAccountId: string;
+  sutPhoneE164: string;
+  target: string;
+  waitForReady: () => Promise<void>;
+};
 
 type WhatsAppQaMessageScenarioRun = {
+  afterReply?: (
+    reply: WhatsAppQaDriverObservedMessage,
+    context: WhatsAppQaMessageScenarioContext,
+  ) => Promise<string | undefined> | string | undefined;
+  afterSend?: (context: WhatsAppQaMessageScenarioContext) => Promise<string | undefined>;
   configMode: "allowlist" | "pairing";
   expectReply: boolean;
   input: string;
@@ -63,12 +103,18 @@ type WhatsAppQaMessageScenarioRun = {
   quietInput?: string;
   quietMatchText?: string | RegExp;
   quietWindowMs?: number;
+  sendMode?: WhatsAppQaMessageSendMode;
   target: "dm" | "group";
+  verify?: (
+    reply: WhatsAppQaDriverObservedMessage,
+    context: WhatsAppQaMessageScenarioContext,
+  ) => void;
 };
 
 type WhatsAppQaApprovalScenarioRun = {
   approvalKind: WhatsAppQaApprovalKind;
   decision: WhatsAppQaApprovalDecision;
+  decisionMode?: WhatsAppQaApprovalDecisionMode;
   kind: "approval";
   token: string;
 };
@@ -80,30 +126,15 @@ type WhatsAppQaConfigOverrides = {
     exec?: boolean;
     plugin?: boolean;
   };
+  groupPolicy?: "allowlist" | "open";
+  replyToMode?: "all" | "first" | "off";
+  statusReactions?: boolean;
 };
 
 type WhatsAppQaScenarioDefinition = LiveTransportScenarioDefinition<WhatsAppQaScenarioId> & {
   buildRun: () => WhatsAppQaScenarioRun;
   configOverrides?: WhatsAppQaConfigOverrides;
   requiresGroupJid?: boolean;
-};
-
-type WhatsAppQaDriverObservedMessage = {
-  fromJid?: string;
-  fromPhoneE164?: string | null;
-  messageId?: string;
-  observedAt: string;
-  text: string;
-};
-
-type WhatsAppQaDriverSession = {
-  close: () => Promise<void>;
-  getObservedMessages: () => WhatsAppQaDriverObservedMessage[];
-  sendText: (to: string, text: string) => Promise<{ messageId?: string }>;
-  waitForMessage: (params: {
-    match: (message: WhatsAppQaDriverObservedMessage) => boolean;
-    timeoutMs: number;
-  }) => Promise<WhatsAppQaDriverObservedMessage>;
 };
 
 type WhatsAppQaGateway = Awaited<ReturnType<typeof startQaGatewayChild>>;
@@ -118,9 +149,16 @@ type WhatsAppObservedMessage = WhatsAppQaDriverObservedMessage & {
 type WhatsAppObservedMessageArtifact = {
   approvalState?: "pending" | "resolved";
   fromPhoneE164?: string | null;
+  hasMedia?: boolean;
+  kind?: WhatsAppQaDriverObservedMessage["kind"];
   matchedScenario?: boolean;
+  mediaFileName?: string;
+  mediaType?: string;
   messageId?: string;
   observedAt: string;
+  poll?: WhatsAppQaDriverObservedMessage["poll"];
+  quoted?: WhatsAppQaDriverObservedMessage["quoted"];
+  reaction?: WhatsAppQaDriverObservedMessage["reaction"];
   scenarioId?: string;
   scenarioTitle?: string;
   text?: string;
@@ -192,6 +230,10 @@ const WHATSAPP_QA_ENV_KEYS = [
   "OPENCLAW_QA_WHATSAPP_DRIVER_AUTH_ARCHIVE_BASE64",
   "OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64",
 ] as const;
+const WHATSAPP_QA_ONE_PIXEL_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lzK4ZQAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 const whatsappQaCredentialPayloadSchema = z.object({
   driverPhoneE164: z.string().trim().min(1),
@@ -253,6 +295,196 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
     },
   },
   {
+    id: "whatsapp-top-level-reply-shape",
+    standardId: "top-level-reply-shape",
+    title: "WhatsApp DM top-level reply shape",
+    timeoutMs: 60_000,
+    configOverrides: {
+      replyToMode: "off",
+    },
+    buildRun: () => {
+      const token = `WHATSAPP_QA_TOP_LEVEL_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Reply with only this exact marker: ${token}`,
+        matchText: token,
+        target: "dm",
+        verify: (reply) => {
+          if (reply.quoted?.messageId) {
+            throw new Error(
+              `expected top-level WhatsApp reply without quote metadata, got quoted message ${reply.quoted.messageId}`,
+            );
+          }
+        },
+      };
+    },
+  },
+  {
+    id: "whatsapp-restart-resume",
+    standardId: "restart-resume",
+    title: "WhatsApp DM resumes after gateway restart",
+    timeoutMs: 120_000,
+    buildRun: () => {
+      const firstToken = `WHATSAPP_QA_RESTART_BEFORE_${randomUUID().slice(0, 8).toUpperCase()}`;
+      const secondToken = `WHATSAPP_QA_RESTART_AFTER_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        afterReply: async (_reply, context) => {
+          await context.gateway.restart();
+          await context.waitForReady();
+          await context.driver.sendText(
+            context.target,
+            `After the restart, reply with only this exact marker: ${secondToken}`,
+          );
+          await context.driver.waitForMessage({
+            timeoutMs: 60_000,
+            match: (message) =>
+              message.fromPhoneE164 === context.sutPhoneE164 && message.text.includes(secondToken),
+          });
+          return "gateway restarted and post-restart reply matched";
+        },
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Before the restart, reply with only this exact marker: ${firstToken}`,
+        matchText: firstToken,
+        target: "dm",
+      };
+    },
+  },
+  {
+    id: "whatsapp-help-command",
+    standardId: "help-command",
+    title: "WhatsApp help command replies",
+    timeoutMs: 60_000,
+    buildRun: () => ({
+      configMode: "allowlist",
+      expectReply: true,
+      input: "/help",
+      matchText: /OpenClaw|commands|status|\/new/iu,
+      target: "dm",
+    }),
+  },
+  {
+    id: "whatsapp-status-command",
+    title: "WhatsApp status command replies",
+    timeoutMs: 60_000,
+    buildRun: () => ({
+      configMode: "allowlist",
+      expectReply: true,
+      input: "/status",
+      matchText: /OpenClaw|status|session|agent/iu,
+      target: "dm",
+    }),
+  },
+  {
+    id: "whatsapp-reply-to-message",
+    title: "WhatsApp DM reply-to mode quotes the triggering message",
+    timeoutMs: 60_000,
+    configOverrides: {
+      replyToMode: "all",
+    },
+    buildRun: () => {
+      const token = `WHATSAPP_QA_REPLY_TO_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Reply with only this exact marker: ${token}`,
+        matchText: token,
+        target: "dm",
+        verify: (reply, context) => {
+          if (!context.sent.messageId) {
+            throw new Error("WhatsApp driver did not return a triggering message id.");
+          }
+          if (reply.quoted?.messageId !== context.sent.messageId) {
+            throw new Error(
+              `expected reply quote ${context.sent.messageId}, got ${reply.quoted?.messageId ?? "<missing>"}`,
+            );
+          }
+        },
+      };
+    },
+  },
+  {
+    id: "whatsapp-inbound-image-caption",
+    title: "WhatsApp inbound image caption reaches the agent",
+    timeoutMs: 60_000,
+    buildRun: () => {
+      const token = `WHATSAPP_QA_IMAGE_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        configMode: "allowlist",
+        expectReply: true,
+        input: `This image caption asks you to reply with only this exact marker: ${token}`,
+        matchText: token,
+        sendMode: {
+          fileName: "whatsapp-qa.png",
+          kind: "media",
+          mediaBuffer: WHATSAPP_QA_ONE_PIXEL_PNG,
+          mediaType: "image/png",
+        },
+        target: "dm",
+      };
+    },
+  },
+  {
+    id: "whatsapp-status-reactions",
+    standardId: "reaction-observation",
+    title: "WhatsApp status reactions are observable",
+    timeoutMs: 60_000,
+    configOverrides: {
+      statusReactions: true,
+    },
+    buildRun: () => {
+      const token = `WHATSAPP_QA_STATUS_REACTION_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        afterSend: async (context) => {
+          if (!context.sent.messageId) {
+            throw new Error("WhatsApp driver did not return a triggering message id.");
+          }
+          const reaction = await context.driver.waitForMessage({
+            timeoutMs: 30_000,
+            match: (message) => {
+              const observedReaction = message.reaction;
+              if (!observedReaction) {
+                return false;
+              }
+              return (
+                message.kind === "reaction" &&
+                message.fromPhoneE164 === context.sutPhoneE164 &&
+                observedReaction.messageId === context.sent.messageId &&
+                Boolean(observedReaction.emoji)
+              );
+            },
+          });
+          return `status reaction ${reaction.reaction?.emoji ?? "<unknown>"} observed`;
+        },
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Reply with only this exact marker after normal processing: ${token}`,
+        matchText: token,
+        target: "dm",
+      };
+    },
+  },
+  {
+    id: "whatsapp-group-allowlist-block",
+    title: "WhatsApp group outside allowlist stays quiet",
+    timeoutMs: 8_000,
+    configOverrides: {
+      groupPolicy: "allowlist",
+    },
+    requiresGroupJid: true,
+    buildRun: () => {
+      const quietToken = `WHATSAPP_QA_GROUP_BLOCK_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        configMode: "allowlist",
+        expectReply: false,
+        input: `openclawqa blocked group should not reply with ${quietToken}`,
+        matchText: quietToken,
+        target: "group",
+      };
+    },
+  },
+  {
     id: "whatsapp-approval-exec-native",
     title: "WhatsApp native exec approval prompt resolves",
     timeoutMs: 60_000,
@@ -266,6 +498,23 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
       decision: "allow-once",
       kind: "approval",
       token: `WHATSAPP_QA_EXEC_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
+    }),
+  },
+  {
+    id: "whatsapp-approval-exec-reaction-native",
+    title: "WhatsApp native exec approval resolves from reaction",
+    timeoutMs: 60_000,
+    configOverrides: {
+      approvals: {
+        exec: true,
+      },
+    },
+    buildRun: () => ({
+      approvalKind: "exec",
+      decision: "allow-once",
+      decisionMode: "reaction",
+      kind: "approval",
+      token: `WHATSAPP_QA_EXEC_REACTION_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
     }),
   },
   {
@@ -397,6 +646,7 @@ function buildWhatsAppQaConfig(
 ): OpenClawConfig {
   const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "whatsapp"]);
   const approvalOverrides = params.overrides?.approvals;
+  const groupPolicy = params.overrides?.groupPolicy ?? "open";
   const approvalForwardingConfig =
     approvalOverrides?.exec || approvalOverrides?.plugin
       ? {
@@ -445,32 +695,53 @@ function buildWhatsAppQaConfig(
             authDir: params.authDir,
             dmPolicy: params.dmPolicy,
             allowFrom: params.allowFrom,
+            ...(params.overrides?.replyToMode
+              ? {
+                  replyToMode: params.overrides.replyToMode,
+                }
+              : {}),
             ...(params.groupJid
               ? {
-                  groupPolicy: "open" as const,
-                  groups: {
-                    [params.groupJid]: { requireMention: true },
-                  },
+                  groupPolicy,
+                  ...(groupPolicy === "open"
+                    ? {
+                        groups: {
+                          [params.groupJid]: { requireMention: true },
+                        },
+                      }
+                    : {}),
                 }
               : {}),
           },
         },
       },
     },
-    ...(params.groupJid
+    ...(params.groupJid || params.overrides?.statusReactions
       ? {
           messages: {
             ...baseCfg.messages,
-            groupChat: {
-              ...baseCfg.messages?.groupChat,
-              visibleReplies: "automatic",
-              mentionPatterns: [
-                ...new Set([
-                  ...(baseCfg.messages?.groupChat?.mentionPatterns ?? []),
-                  "\\bopenclawqa\\b",
-                ]),
-              ],
-            },
+            ...(params.groupJid
+              ? {
+                  groupChat: {
+                    ...baseCfg.messages?.groupChat,
+                    visibleReplies: "automatic",
+                    mentionPatterns: [
+                      ...new Set([
+                        ...(baseCfg.messages?.groupChat?.mentionPatterns ?? []),
+                        "\\bopenclawqa\\b",
+                      ]),
+                    ],
+                  },
+                }
+              : {}),
+            ...(params.overrides?.statusReactions
+              ? {
+                  statusReactions: {
+                    ...baseCfg.messages?.statusReactions,
+                    enabled: true,
+                  },
+                }
+              : {}),
           },
         }
       : {}),
@@ -880,7 +1151,7 @@ async function runWhatsAppApprovalScenario(params: {
     run: params.run,
     sutAccountId: params.sutAccountId,
   });
-  await waitForWhatsAppApprovalMessage({
+  const pending = await waitForWhatsAppApprovalMessage({
     approvalId,
     approvalKind: params.run.approvalKind,
     driver: params.driver,
@@ -903,12 +1174,21 @@ async function runWhatsAppApprovalScenario(params: {
     token: params.run.token,
   });
   try {
-    await resolveApprovalDecision({
-      approvalId,
-      decision: params.run.decision,
-      gateway: params.gateway,
-      kind: params.run.approvalKind,
-    });
+    if (params.run.decisionMode === "reaction") {
+      if (!pending.fromJid || !pending.messageId) {
+        throw new Error("WhatsApp approval prompt did not expose message coordinates.");
+      }
+      await params.driver.sendReaction(pending.fromJid, pending.messageId, "👍", {
+        fromMe: false,
+      });
+    } else {
+      await resolveApprovalDecision({
+        approvalId,
+        decision: params.run.decision,
+        gateway: params.gateway,
+        kind: params.run.approvalKind,
+      });
+    }
     assertApprovalDecisionResult({
       decision: params.run.decision,
       result: await waitForApprovalDecision({
@@ -1045,11 +1325,49 @@ async function runWhatsAppScenario(params: {
       }
     }
     const requestStartedAt = new Date();
-    await params.driver.sendText(target, scenarioRun.input);
+    const sent =
+      scenarioRun.sendMode?.kind === "media"
+        ? await params.driver.sendMedia(
+            target,
+            scenarioRun.input,
+            scenarioRun.sendMode.mediaBuffer,
+            scenarioRun.sendMode.mediaType,
+            {
+              fileName: scenarioRun.sendMode.fileName,
+            },
+          )
+        : await params.driver.sendText(target, scenarioRun.input);
+    const scenarioContext: WhatsAppQaMessageScenarioContext = {
+      driver: params.driver,
+      gateway: gatewayHarness.gateway,
+      sent,
+      sutAccountId: params.sutAccountId,
+      sutPhoneE164: params.sutPhoneE164,
+      target,
+      waitForReady: async () => {
+        await waitForWhatsAppChannelStable(gatewayHarness.gateway, params.sutAccountId);
+      },
+    };
+    const afterSendDetails = await scenarioRun.afterSend?.(scenarioContext);
     if (!scenarioRun.expectReply) {
       await new Promise((resolve) => {
         setTimeout(resolve, params.scenario.timeoutMs);
       });
+      const unexpectedReply = params.driver.getObservedMessages().find((message) => {
+        if (new Date(message.observedAt).getTime() < requestStartedAt.getTime()) {
+          return false;
+        }
+        if (scenarioRun.target === "group" && message.fromJid !== params.groupJid) {
+          return false;
+        }
+        if (scenarioRun.target === "dm" && message.fromPhoneE164 !== params.sutPhoneE164) {
+          return false;
+        }
+        return messageMatches(message as WhatsAppObservedMessage, scenarioRun.matchText);
+      });
+      if (unexpectedReply) {
+        throw new Error("unexpected WhatsApp reply matched a quiet scenario marker");
+      }
       return {
         id: params.scenario.id,
         title: params.scenario.title,
@@ -1071,14 +1389,18 @@ async function runWhatsAppScenario(params: {
       scenarioId: params.scenario.id,
       scenarioTitle: params.scenario.title,
     };
+    scenarioRun.verify?.(reply, scenarioContext);
     params.observedMessages.push(observed);
+    const afterReplyDetails = await scenarioRun.afterReply?.(reply, scenarioContext);
     const responseObservedAt = new Date(reply.observedAt);
     const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
     return {
       id: params.scenario.id,
       title: params.scenario.title,
       status: "pass" as const,
-      details: `reply matched in ${rttMs}ms`,
+      details: [`reply matched in ${rttMs}ms`, afterSendDetails, afterReplyDetails]
+        .filter(Boolean)
+        .join("; "),
       rttMs,
       requestStartedAt: requestStartedAt.toISOString(),
       responseObservedAt: responseObservedAt.toISOString(),
@@ -1110,9 +1432,27 @@ function toObservedWhatsAppArtifacts(params: {
   return params.messages.map((message) => ({
     approvalState: message.approvalState,
     fromPhoneE164: params.redactMetadata ? undefined : message.fromPhoneE164,
+    hasMedia: message.hasMedia,
+    kind: message.kind,
     matchedScenario: message.matchedScenario,
+    mediaFileName: params.redactMetadata ? undefined : message.mediaFileName,
+    mediaType: message.mediaType,
     messageId: params.redactMetadata ? undefined : message.messageId,
     observedAt: message.observedAt,
+    poll: params.includeContent ? message.poll : undefined,
+    quoted:
+      message.quoted && !params.redactMetadata
+        ? message.quoted
+        : message.quoted
+          ? { text: params.includeContent ? message.quoted.text : undefined }
+          : undefined,
+    reaction: message.reaction
+      ? {
+          emoji: message.reaction.emoji,
+          fromMe: message.reaction.fromMe,
+          messageId: params.redactMetadata ? undefined : message.reaction.messageId,
+        }
+      : undefined,
     scenarioId: message.scenarioId,
     scenarioTitle: message.scenarioTitle,
     text: params.includeContent ? message.text : undefined,
