@@ -199,9 +199,16 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-top-level-reply-shape",
       "whatsapp-restart-resume",
       "whatsapp-help-command",
+      "whatsapp-commands-command",
+      "whatsapp-tools-compact-command",
+      "whatsapp-whoami-command",
+      "whatsapp-context-command",
+      "whatsapp-tool-only-usage-footer",
+      "whatsapp-reply-context-isolation",
       "whatsapp-inbound-image-caption",
       "whatsapp-audio-preflight",
       "whatsapp-outbound-media-matrix",
+      "whatsapp-outbound-document-preserves-filename",
       "whatsapp-outbound-poll",
       "whatsapp-message-actions",
       "whatsapp-inbound-structured-messages",
@@ -211,9 +218,77 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-access-control-group-open",
       "whatsapp-access-control-group-disabled",
       "whatsapp-reply-delivery-shape",
+      "whatsapp-stream-final-message-accounting",
       "whatsapp-native-new-command",
       "whatsapp-status-reactions",
     ]);
+  });
+
+  it("adds WhatsApp command UX parity scenarios to the mock-backed selection", () => {
+    const scenarios = testing.findScenarios([
+      "whatsapp-commands-command",
+      "whatsapp-tools-compact-command",
+      "whatsapp-whoami-command",
+      "whatsapp-context-command",
+      "whatsapp-tool-only-usage-footer",
+    ]);
+
+    expect(
+      scenarios.map((scenario) => {
+        const run = scenario.buildRun();
+        if (run.kind === "approval") {
+          throw new Error(`${scenario.id} unexpectedly built an approval run`);
+        }
+        return [scenario.id, run.input, String(run.matchText)] as const;
+      }),
+    ).toEqual([
+      [
+        "whatsapp-commands-command",
+        "/commands",
+        "/(?=.*Commands \\()(?=.*\\/session)(?=.*\\/verbose)/isu",
+      ],
+      [
+        "whatsapp-tools-compact-command",
+        "/tools compact",
+        "/(?=.*Available tools)(?=.*exec)(?=.*Use \\/tools verbose for descriptions)/isu",
+      ],
+      [
+        "whatsapp-whoami-command",
+        "/whoami",
+        "/(?=.*Identity)(?=.*Channel: whatsapp)(?=.*AllowFrom:)/isu",
+      ],
+      [
+        "whatsapp-context-command",
+        "/context list",
+        "/(?=.*Context breakdown)(?=.*Workspace:)(?=.*Tool schemas)/isu",
+      ],
+      ["whatsapp-tool-only-usage-footer", "/usage tokens", "/Usage footer: tokens/iu"],
+    ]);
+    expect(scenarios.map((scenario) => scenario.defaultProviderModes)).toEqual([
+      ["mock-openai"],
+      ["mock-openai"],
+      ["mock-openai"],
+      ["mock-openai"],
+      ["mock-openai"],
+    ]);
+  });
+
+  it("defines WhatsApp final-message accounting as a settled two-chunk assertion", () => {
+    const [scenario] = testing.findScenarios(["whatsapp-stream-final-message-accounting"]);
+    const run = scenario.buildRun();
+    if (run.kind === "approval") {
+      throw new Error("whatsapp-stream-final-message-accounting unexpectedly built approval run");
+    }
+
+    expect(scenario.defaultProviderModes).toEqual(["mock-openai"]);
+    expect(run.input).toContain("WhatsApp long final QA check");
+    expect(run.matchText).toBe("WHATSAPP-LONG-FINAL-BEGIN");
+    expect(run.expectedJoinedSutTextIncludes).toEqual([
+      "WHATSAPP-LONG-FINAL-BEGIN",
+      "WHATSAPP-LONG-FINAL-END",
+    ]);
+    expect(run.expectedSutMessageCount).toBe(2);
+    expect(run.settleMs).toBe(4_000);
   });
 
   it("selects native approval scenarios by id without changing standard coverage", () => {

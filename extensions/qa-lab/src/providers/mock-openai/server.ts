@@ -159,6 +159,7 @@ const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_s
 const QA_TELEGRAM_STREAM_SINGLE_MARKER = "QA-TELEGRAM-STREAM-SINGLE-OK";
 const QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE = /telegram long final three chunk qa check/i;
 const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
+const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
@@ -1469,19 +1470,20 @@ function splitMockStreamingText(text: string, parts = 3) {
   return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
 }
 
-function buildTelegramLongFinalText({
+function buildQaLongFinalText({
   endMarker = "TELEGRAM-LONG-FINAL-END",
+  segmentPrefix = "telegram-long-final-segment",
   segmentCount = 42,
   startMarker = "TELEGRAM-LONG-FINAL-BEGIN",
 }: {
   endMarker?: string;
+  segmentPrefix?: string;
   segmentCount?: number;
   startMarker?: string;
 } = {}) {
   const body = Array.from(
     { length: segmentCount },
-    (_, index) =>
-      `telegram-long-final-segment-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
+    (_, index) => `${segmentPrefix}-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
   ).join("\n");
   return `${startMarker}\n${body}\n${endMarker}`;
 }
@@ -1976,7 +1978,7 @@ async function buildResponsesPayload(
     return buildAssistantEvents("");
   }
   if (QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE.test(allInputText)) {
-    const text = buildTelegramLongFinalText({
+    const text = buildQaLongFinalText({
       endMarker: "TELEGRAM-LONG-FINAL-3CHUNK-END",
       segmentCount: 96,
       startMarker: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
@@ -1991,10 +1993,26 @@ async function buildResponsesPayload(
     ]);
   }
   if (QA_TELEGRAM_LONG_FINAL_PROMPT_RE.test(allInputText)) {
-    const text = buildTelegramLongFinalText();
+    const text = buildQaLongFinalText();
     return buildAssistantEvents([
       {
         id: "msg_mock_telegram_long_final",
+        phase: "final_answer",
+        streamDeltas: splitMockStreamingText(text),
+        text,
+      },
+    ]);
+  }
+  if (QA_WHATSAPP_LONG_FINAL_PROMPT_RE.test(allInputText)) {
+    const text = buildQaLongFinalText({
+      endMarker: "WHATSAPP-LONG-FINAL-END",
+      segmentPrefix: "whatsapp-long-final-segment",
+      segmentCount: 64,
+      startMarker: "WHATSAPP-LONG-FINAL-BEGIN",
+    });
+    return buildAssistantEvents([
+      {
+        id: "msg_mock_whatsapp_long_final",
         phase: "final_answer",
         streamDeltas: splitMockStreamingText(text),
         text,
