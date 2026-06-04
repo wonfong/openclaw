@@ -201,6 +201,17 @@ describe("WhatsApp QA live runtime", () => {
       "whatsapp-help-command",
       "whatsapp-inbound-image-caption",
       "whatsapp-audio-preflight",
+      "whatsapp-outbound-media-matrix",
+      "whatsapp-outbound-poll",
+      "whatsapp-message-actions",
+      "whatsapp-inbound-structured-messages",
+      "whatsapp-group-audio-gating",
+      "whatsapp-access-control-dm-open",
+      "whatsapp-access-control-dm-disabled",
+      "whatsapp-access-control-group-open",
+      "whatsapp-access-control-group-disabled",
+      "whatsapp-reply-delivery-shape",
+      "whatsapp-native-new-command",
       "whatsapp-status-reactions",
     ]);
   });
@@ -273,6 +284,24 @@ describe("WhatsApp QA live runtime", () => {
       enabled: true,
       models: [{ provider: "openai", model: "gpt-4o-transcribe" }],
     });
+  });
+
+  it("enables WhatsApp action discovery for message action scenarios", () => {
+    const cfg = testing.buildWhatsAppQaConfig(
+      {},
+      {
+        allowFrom: ["+15550000001"],
+        authDir: "/tmp/openclaw-whatsapp-qa-auth",
+        dmPolicy: "allowlist",
+        overrides: {
+          actions: true,
+        },
+        sutAccountId: "sut",
+      },
+    );
+
+    expect(cfg.channels?.whatsapp?.actions).toEqual({ reactions: true, polls: true });
+    expect(cfg.channels?.whatsapp?.reactionLevel).toBe("minimal");
   });
 
   it("defines the WhatsApp audio preflight scenario as mock-backed audio media", () => {
@@ -348,6 +377,14 @@ describe("WhatsApp QA live runtime", () => {
         approvalId: "whatsapp-qa-plugin-123",
         approvalKind: "plugin",
         text: "✅ Plugin approval allowed once. ID: whatsapp-qa-plugin-123",
+      }),
+    ).toBe(true);
+    expect(
+      testing.matchesWhatsAppApprovalResolvedText({
+        approvalId: "whatsapp-qa-exec-deny-123",
+        approvalKind: "exec",
+        decision: "deny",
+        text: "✅ Exec approval denied. ID: whatsapp-qa-exec-deny-123",
       }),
     ).toBe(true);
   });

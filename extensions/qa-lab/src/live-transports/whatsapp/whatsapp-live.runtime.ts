@@ -50,14 +50,26 @@ export type WhatsAppQaRuntimeEnv = {
 };
 
 type WhatsAppQaScenarioId =
+  | "whatsapp-access-control-dm-disabled"
+  | "whatsapp-access-control-dm-open"
+  | "whatsapp-access-control-group-disabled"
+  | "whatsapp-access-control-group-open"
+  | "whatsapp-approval-exec-deny-native"
   | "whatsapp-approval-exec-reaction-native"
   | "whatsapp-audio-preflight"
   | "whatsapp-canary"
   | "whatsapp-group-allowlist-block"
+  | "whatsapp-group-audio-gating"
   | "whatsapp-help-command"
   | "whatsapp-inbound-image-caption"
+  | "whatsapp-inbound-structured-messages"
+  | "whatsapp-message-actions"
+  | "whatsapp-native-new-command"
+  | "whatsapp-outbound-media-matrix"
+  | "whatsapp-outbound-poll"
   | "whatsapp-pairing-block"
   | "whatsapp-mention-gating"
+  | "whatsapp-reply-delivery-shape"
   | "whatsapp-reply-to-message"
   | "whatsapp-restart-resume"
   | "whatsapp-status-command"
@@ -67,7 +79,7 @@ type WhatsAppQaScenarioId =
   | "whatsapp-approval-plugin-native";
 
 type WhatsAppQaApprovalKind = "exec" | "plugin";
-type WhatsAppQaApprovalDecision = "allow-once";
+type WhatsAppQaApprovalDecision = "allow-once" | "deny";
 type WhatsAppQaApprovalDecisionMode = "reaction" | "rpc";
 
 type WhatsAppQaMessageSendMode =
@@ -84,6 +96,10 @@ type WhatsAppQaMessageSendMode =
 type WhatsAppQaMessageScenarioContext = {
   driver: WhatsAppQaDriverSession;
   gateway: WhatsAppQaGateway;
+  gatewayWorkspaceDir: string;
+  recordObservedMessage: (message: WhatsAppQaDriverObservedMessage) => void;
+  scenarioId: WhatsAppQaScenarioId;
+  scenarioTitle: string;
   sent: { messageId?: string };
   sutAccountId: string;
   sutPhoneE164: string;
@@ -97,7 +113,7 @@ type WhatsAppQaMessageScenarioRun = {
     context: WhatsAppQaMessageScenarioContext,
   ) => Promise<string | undefined> | string | undefined;
   afterSend?: (context: WhatsAppQaMessageScenarioContext) => Promise<string | undefined>;
-  configMode: "allowlist" | "pairing";
+  configMode: "allowlist" | "disabled" | "open" | "pairing";
   expectReply: boolean;
   input: string;
   kind?: "message";
@@ -124,12 +140,13 @@ type WhatsAppQaApprovalScenarioRun = {
 type WhatsAppQaScenarioRun = WhatsAppQaApprovalScenarioRun | WhatsAppQaMessageScenarioRun;
 
 type WhatsAppQaConfigOverrides = {
+  actions?: boolean;
   audioPreflight?: boolean;
   approvals?: {
     exec?: boolean;
     plugin?: boolean;
   };
-  groupPolicy?: "allowlist" | "open";
+  groupPolicy?: "allowlist" | "disabled" | "open";
   replyToMode?: "all" | "first" | "off";
   statusReactions?: boolean;
 };
@@ -240,7 +257,33 @@ const WHATSAPP_QA_ONE_PIXEL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lzK4ZQAAAABJRU5ErkJggg==",
   "base64",
 );
+const WHATSAPP_QA_ONE_PIXEL_WEBP = Buffer.from(
+  "UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AA/vuUAAA=",
+  "base64",
+);
 const WHATSAPP_QA_AUDIO_TRANSCRIPT_MARKER = "WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
+
+function createWhatsAppQaPdfBuffer() {
+  return Buffer.from(
+    [
+      "%PDF-1.4",
+      "1 0 obj",
+      "<< /Type /Catalog /Pages 2 0 R >>",
+      "endobj",
+      "2 0 obj",
+      "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      "endobj",
+      "3 0 obj",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+      "endobj",
+      "trailer",
+      "<< /Root 1 0 R >>",
+      "%%EOF",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
 
 function createWhatsAppQaAudioWavBuffer() {
   const sampleRate = 16_000;
@@ -481,6 +524,443 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
     }),
   },
   {
+    id: "whatsapp-outbound-media-matrix",
+    title: "WhatsApp gateway send delivers outbound media variants",
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 120_000,
+    buildRun: () => {
+      const token = `WHATSAPP_QA_OUTBOUND_MEDIA_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        afterReply: async (_reply, context) => {
+          const mediaRootToken = randomUUID().slice(0, 8);
+          const imagePath = await writeWhatsAppQaWorkspaceFixture(context, {
+            buffer: WHATSAPP_QA_ONE_PIXEL_PNG,
+            fileName: `whatsapp-qa-${mediaRootToken}.png`,
+          });
+          const documentPath = await writeWhatsAppQaWorkspaceFixture(context, {
+            buffer: createWhatsAppQaPdfBuffer(),
+            fileName: `whatsapp-qa-${mediaRootToken}.pdf`,
+          });
+          const audioPath = await writeWhatsAppQaWorkspaceFixture(context, {
+            buffer: createWhatsAppQaAudioWavBuffer(),
+            fileName: `whatsapp-qa-${mediaRootToken}.wav`,
+          });
+
+          const imageStartedAt = new Date();
+          await callWhatsAppGatewaySend(context, {
+            label: "image",
+            mediaUrl: imagePath,
+            message: `${token}_IMAGE`,
+          });
+          await waitForScenarioObservedMessage(context, {
+            observedAfter: imageStartedAt,
+            match: (message) =>
+              message.kind === "media" &&
+              message.hasMedia === true &&
+              message.mediaType?.startsWith("image/") === true &&
+              message.text.includes(`${token}_IMAGE`),
+          });
+
+          const documentStartedAt = new Date();
+          await callWhatsAppGatewaySend(context, {
+            forceDocument: true,
+            label: "document",
+            mediaUrl: documentPath,
+            message: `${token}_DOCUMENT`,
+          });
+          await waitForScenarioObservedMessage(context, {
+            observedAfter: documentStartedAt,
+            match: (message) =>
+              message.kind === "media" &&
+              message.hasMedia === true &&
+              (message.mediaType === "application/pdf" ||
+                message.mediaFileName?.endsWith(".pdf") === true) &&
+              message.text.includes(`${token}_DOCUMENT`),
+          });
+
+          const audioStartedAt = new Date();
+          await callWhatsAppGatewaySend(context, {
+            asVoice: true,
+            label: "audio",
+            mediaUrl: audioPath,
+            message: `${token}_AUDIO`,
+          });
+          await waitForScenarioObservedMessage(context, {
+            observedAfter: audioStartedAt,
+            match: (message) =>
+              message.kind === "media" &&
+              message.hasMedia === true &&
+              message.mediaType?.startsWith("audio/") === true,
+          });
+          await waitForScenarioObservedMessage(context, {
+            observedAfter: audioStartedAt,
+            match: (message) => message.text.includes(`${token}_AUDIO`),
+          });
+
+          const multiStartedAt = new Date();
+          await callWhatsAppGatewaySend(context, {
+            label: "multi",
+            mediaUrls: [imagePath, documentPath],
+            message: `${token}_MULTI`,
+          });
+          await waitForScenarioObservedMessage(context, {
+            observedAfter: multiStartedAt,
+            match: (message) =>
+              message.kind === "media" && message.mediaType?.startsWith("image/") === true,
+          });
+          await waitForScenarioObservedMessage(context, {
+            observedAfter: multiStartedAt,
+            match: (message) =>
+              message.kind === "media" &&
+              (message.mediaType === "application/pdf" ||
+                message.mediaFileName?.endsWith(".pdf") === true),
+          });
+          return "gateway send delivered image, document, audio, and multi-media";
+        },
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Reply with only this exact marker before outbound media checks: ${token}`,
+        matchText: token,
+        target: "dm",
+      };
+    },
+  },
+  {
+    id: "whatsapp-outbound-poll",
+    title: "WhatsApp gateway poll delivers outbound native poll",
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 90_000,
+    buildRun: () => {
+      const token = `WHATSAPP_QA_OUTBOUND_POLL_${randomUUID().slice(0, 8).toUpperCase()}`;
+      const question = `${token} choose one`;
+      return {
+        afterReply: async (_reply, context) => {
+          const pollStartedAt = new Date();
+          await callWhatsAppGatewayPoll(context, {
+            label: "poll",
+            options: ["alpha", "beta"],
+            question,
+          });
+          const poll = await waitForScenarioObservedMessage(context, {
+            observedAfter: pollStartedAt,
+            match: (message) =>
+              message.kind === "poll" &&
+              message.poll?.question === question &&
+              message.poll.options.includes("alpha") &&
+              message.poll.options.includes("beta"),
+          });
+          return `poll observed with ${poll.poll?.options.length ?? 0} options`;
+        },
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Reply with only this exact marker before outbound poll check: ${token}`,
+        matchText: token,
+        target: "dm",
+      };
+    },
+  },
+  {
+    id: "whatsapp-message-actions",
+    title: "WhatsApp message.action react and upload-file execute",
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 120_000,
+    configOverrides: {
+      actions: true,
+    },
+    buildRun: () => {
+      const token = `WHATSAPP_QA_ACTIONS_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        afterReply: async (_reply, context) => {
+          if (!context.sent.messageId) {
+            throw new Error("WhatsApp driver did not return a triggering message id.");
+          }
+          const reactionStartedAt = new Date();
+          await callWhatsAppGatewayMessageAction(context, {
+            action: "react",
+            label: "react",
+            params: {
+              emoji: "👍",
+              messageId: context.sent.messageId,
+              to: context.target,
+            },
+          });
+          await waitForScenarioObservedMessage(context, {
+            observedAfter: reactionStartedAt,
+            match: (message) =>
+              message.kind === "reaction" &&
+              message.reaction?.messageId === context.sent.messageId &&
+              message.reaction?.emoji === "👍",
+          });
+
+          const uploadStartedAt = new Date();
+          await callWhatsAppGatewayMessageAction(context, {
+            action: "upload-file",
+            label: "upload-file",
+            params: {
+              buffer: WHATSAPP_QA_ONE_PIXEL_PNG.toString("base64"),
+              caption: `${token}_UPLOAD`,
+              contentType: "image/png",
+              filename: "whatsapp-qa-upload.png",
+              to: context.target,
+            },
+          });
+          await waitForScenarioObservedMessage(context, {
+            observedAfter: uploadStartedAt,
+            match: (message) =>
+              message.kind === "media" &&
+              message.mediaType?.startsWith("image/") === true &&
+              message.text.includes(`${token}_UPLOAD`),
+          });
+          return "message.action react and upload-file observed";
+        },
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Reply with only this exact marker before action checks: ${token}`,
+        matchText: token,
+        target: "dm",
+      };
+    },
+  },
+  {
+    id: "whatsapp-inbound-structured-messages",
+    title: "WhatsApp inbound structured messages reach the agent",
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 150_000,
+    buildRun: () => {
+      const token = `WHATSAPP_QA_STRUCTURED_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        afterReply: async (_reply, context) => {
+          const documentToken = `${token}_DOCUMENT`;
+          await context.driver.sendMedia(
+            context.target,
+            `Reply with only this exact marker after reading the document caption: ${documentToken}`,
+            createWhatsAppQaPdfBuffer(),
+            "application/pdf",
+            { fileName: "whatsapp-qa-document.pdf" },
+          );
+          const documentReply = await context.driver.waitForMessage({
+            timeoutMs: 60_000,
+            match: (message) =>
+              message.fromPhoneE164 === context.sutPhoneE164 &&
+              message.text.includes(documentToken),
+          });
+          context.recordObservedMessage(documentReply);
+
+          const pollToken = `${token}_POLL`;
+          await context.driver.sendPoll(context.target, {
+            question: `Reply with only this exact marker after seeing this poll: ${pollToken}`,
+            options: ["yes", "no"],
+          });
+          const pollReply = await context.driver.waitForMessage({
+            timeoutMs: 60_000,
+            match: (message) =>
+              message.fromPhoneE164 === context.sutPhoneE164 && message.text.includes(pollToken),
+          });
+          context.recordObservedMessage(pollReply);
+
+          await context.driver.sendContact(context.target, {
+            displayName: "WhatsApp QA Contact",
+            vcard: "BEGIN:VCARD\nVERSION:3.0\nFN:WhatsApp QA Contact\nTEL:+15550101010\nEND:VCARD",
+          });
+          const locationToken = `${token}_LOCATION`;
+          await context.driver.sendLocation(context.target, {
+            degreesLatitude: 37.7749,
+            degreesLongitude: -122.4194,
+            name: `Reply with only this exact marker after seeing this location: ${locationToken}`,
+          });
+          const locationReply = await context.driver.waitForMessage({
+            timeoutMs: 60_000,
+            match: (message) =>
+              message.fromPhoneE164 === context.sutPhoneE164 &&
+              message.text.includes(locationToken),
+          });
+          context.recordObservedMessage(locationReply);
+          await context.driver.sendSticker(context.target, WHATSAPP_QA_ONE_PIXEL_WEBP, {
+            mimetype: "image/webp",
+          });
+          return "document, poll, and location elicited replies; contact and sticker were sent";
+        },
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Reply with only this exact marker before structured inbound checks: ${token}`,
+        matchText: token,
+        target: "dm",
+      };
+    },
+  },
+  {
+    id: "whatsapp-group-audio-gating",
+    title: "WhatsApp group audio mention gating",
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 120_000,
+    configOverrides: {
+      audioPreflight: true,
+    },
+    requiredPluginIds: ["openai"],
+    requiresGroupJid: true,
+    buildRun: () => {
+      const quietToken = `WHATSAPP_QA_GROUP_AUDIO_QUIET_${randomUUID().slice(0, 8).toUpperCase()}`;
+      const replyToken = `WHATSAPP_QA_GROUP_AUDIO_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        configMode: "allowlist",
+        expectReply: true,
+        input: `openclawqa reply with only this exact marker after group audio preflight: ${replyToken}`,
+        matchText: replyToken,
+        quietInput: `This unmentioned group audio caption must stay quiet: ${quietToken}`,
+        quietMatchText: quietToken,
+        quietWindowMs: 5_000,
+        sendMode: {
+          fileName: "whatsapp-qa-group-audio.wav",
+          kind: "media",
+          mediaBuffer: createWhatsAppQaAudioWavBuffer(),
+          mediaType: "audio/wav",
+        },
+        target: "group",
+      };
+    },
+  },
+  {
+    id: "whatsapp-access-control-dm-open",
+    title: "WhatsApp dmPolicy open allows direct messages",
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 60_000,
+    buildRun: () => {
+      const token = `WHATSAPP_QA_DM_OPEN_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        configMode: "open",
+        expectReply: true,
+        input: `Reply with only this exact marker under dmPolicy open: ${token}`,
+        matchText: token,
+        target: "dm",
+      };
+    },
+  },
+  {
+    id: "whatsapp-access-control-dm-disabled",
+    title: "WhatsApp dmPolicy disabled stays quiet",
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 8_000,
+    buildRun: () => {
+      const token = `WHATSAPP_QA_DM_DISABLED_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        configMode: "disabled",
+        expectReply: false,
+        input: `Do not reply under dmPolicy disabled. Forbidden marker: ${token}`,
+        matchText: token,
+        target: "dm",
+      };
+    },
+  },
+  {
+    id: "whatsapp-access-control-group-open",
+    title: "WhatsApp groupPolicy open allows mention-gated groups",
+    defaultProviderModes: ["mock-openai"],
+    requiresGroupJid: true,
+    timeoutMs: 60_000,
+    configOverrides: {
+      groupPolicy: "open",
+    },
+    buildRun: () => {
+      const token = `WHATSAPP_QA_GROUP_OPEN_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        configMode: "allowlist",
+        expectReply: true,
+        input: `openclawqa reply with only this exact marker under groupPolicy open: ${token}`,
+        matchText: token,
+        target: "group",
+      };
+    },
+  },
+  {
+    id: "whatsapp-access-control-group-disabled",
+    title: "WhatsApp groupPolicy disabled stays quiet",
+    defaultProviderModes: ["mock-openai"],
+    requiresGroupJid: true,
+    timeoutMs: 8_000,
+    configOverrides: {
+      groupPolicy: "disabled",
+    },
+    buildRun: () => {
+      const token = `WHATSAPP_QA_GROUP_DISABLED_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        configMode: "allowlist",
+        expectReply: false,
+        input: `openclawqa groupPolicy disabled must not reply with ${token}`,
+        matchText: token,
+        target: "group",
+      };
+    },
+  },
+  {
+    id: "whatsapp-reply-delivery-shape",
+    title: "WhatsApp gateway send chunks long quoted replies",
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 120_000,
+    buildRun: () => {
+      const token = `WHATSAPP_QA_REPLY_SHAPE_${randomUUID().slice(0, 8).toUpperCase()}`;
+      return {
+        afterReply: async (_reply, context) => {
+          if (!context.sent.messageId) {
+            throw new Error("WhatsApp driver did not return a triggering message id.");
+          }
+          const chunkStartedAt = new Date();
+          const longText = `${token}_LONG_BEGIN\n${"A".repeat(4_500)}\n${token}_LONG_END`;
+          await callWhatsAppGatewaySend(context, {
+            label: "long-reply",
+            message: longText,
+            replyToId: context.sent.messageId,
+          });
+          const firstChunk = await waitForScenarioObservedMessage(context, {
+            observedAfter: chunkStartedAt,
+            match: (message) =>
+              message.text.includes(`${token}_LONG_BEGIN`) &&
+              message.quoted?.messageId === context.sent.messageId,
+          });
+          const secondChunk = await waitForScenarioObservedMessage(context, {
+            observedAfter: chunkStartedAt,
+            match: (message) =>
+              message.messageId !== firstChunk.messageId && message.text.length > 0,
+          });
+          return `long reply chunked across ${firstChunk.messageId ?? "<first>"} and ${secondChunk.messageId ?? "<second>"}`;
+        },
+        configMode: "allowlist",
+        expectReply: true,
+        input: `Reply with only this exact marker before reply-shape checks: ${token}`,
+        matchText: token,
+        target: "dm",
+      };
+    },
+  },
+  {
+    id: "whatsapp-native-new-command",
+    title: "WhatsApp /new command starts a new session",
+    defaultProviderModes: ["mock-openai"],
+    timeoutMs: 60_000,
+    buildRun: () => ({
+      configMode: "allowlist",
+      expectReply: true,
+      input: "/new",
+      matchText: /new session|session/i,
+      target: "dm",
+    }),
+  },
+  {
+    id: "whatsapp-approval-exec-deny-native",
+    title: "WhatsApp native exec approval prompt denies",
+    timeoutMs: 60_000,
+    configOverrides: {
+      approvals: {
+        exec: true,
+      },
+    },
+    buildRun: () => ({
+      approvalKind: "exec",
+      decision: "deny",
+      kind: "approval",
+      token: `WHATSAPP_QA_EXEC_DENY_${randomUUID().slice(0, 8).toUpperCase()}`,
+    }),
+  },
+  {
     id: "whatsapp-status-reactions",
     standardId: "reaction-observation",
     title: "WhatsApp status reactions are observable",
@@ -710,7 +1190,7 @@ function buildWhatsAppQaConfig(
   params: {
     allowFrom: string[];
     authDir: string;
-    dmPolicy: "allowlist" | "pairing";
+    dmPolicy: "allowlist" | "disabled" | "open" | "pairing";
     groupJid?: string;
     overrides?: WhatsAppQaConfigOverrides;
     sutAccountId: string;
@@ -782,6 +1262,15 @@ function buildWhatsAppQaConfig(
       whatsapp: {
         enabled: true,
         defaultAccount: params.sutAccountId,
+        ...(params.overrides?.actions
+          ? {
+              actions: {
+                reactions: true,
+                polls: true,
+              },
+              reactionLevel: "minimal" as const,
+            }
+          : {}),
         accounts: {
           [params.sutAccountId]: {
             enabled: true,
@@ -968,6 +1457,120 @@ function messageMatches(message: WhatsAppObservedMessage, matchText: string | Re
   return typeof matchText === "string"
     ? message.text.includes(matchText)
     : matchText.test(message.text);
+}
+
+function buildWhatsAppQaIdempotencyKey(scenarioId: WhatsAppQaScenarioId, label: string) {
+  return `${scenarioId}:${label}:${randomUUID()}`;
+}
+
+async function writeWhatsAppQaWorkspaceFixture(
+  context: WhatsAppQaMessageScenarioContext,
+  params: {
+    buffer: Buffer;
+    fileName: string;
+  },
+) {
+  const fixtureDir = path.join(context.gatewayWorkspaceDir, ".openclaw", "qa-whatsapp-media");
+  await fs.mkdir(fixtureDir, { recursive: true });
+  const filePath = path.join(fixtureDir, params.fileName);
+  await fs.writeFile(filePath, params.buffer);
+  return filePath;
+}
+
+async function callWhatsAppGatewaySend(
+  context: WhatsAppQaMessageScenarioContext,
+  params: {
+    asVoice?: boolean;
+    forceDocument?: boolean;
+    label: string;
+    mediaUrl?: string;
+    mediaUrls?: string[];
+    message?: string;
+    replyToId?: string;
+  },
+) {
+  return await context.gateway.call(
+    "send",
+    {
+      accountId: context.sutAccountId,
+      agentId: "main",
+      channel: "whatsapp",
+      idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
+      to: context.target,
+      ...(params.message !== undefined ? { message: params.message } : {}),
+      ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
+      ...(params.mediaUrls ? { mediaUrls: params.mediaUrls } : {}),
+      ...(params.asVoice !== undefined ? { asVoice: params.asVoice } : {}),
+      ...(params.forceDocument !== undefined ? { forceDocument: params.forceDocument } : {}),
+      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+    },
+    { timeoutMs: 60_000 },
+  );
+}
+
+async function callWhatsAppGatewayPoll(
+  context: WhatsAppQaMessageScenarioContext,
+  params: {
+    label: string;
+    maxSelections?: number;
+    options: string[];
+    question: string;
+  },
+) {
+  return await context.gateway.call(
+    "poll",
+    {
+      accountId: context.sutAccountId,
+      channel: "whatsapp",
+      idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
+      maxSelections: params.maxSelections,
+      options: params.options,
+      question: params.question,
+      to: context.target,
+    },
+    { timeoutMs: 60_000 },
+  );
+}
+
+async function callWhatsAppGatewayMessageAction(
+  context: WhatsAppQaMessageScenarioContext,
+  params: {
+    action: "react" | "upload-file";
+    label: string;
+    params: Record<string, unknown>;
+  },
+) {
+  return await context.gateway.call(
+    "message.action",
+    {
+      accountId: context.sutAccountId,
+      action: params.action,
+      channel: "whatsapp",
+      idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
+      params: params.params,
+    },
+    { timeoutMs: 60_000 },
+  );
+}
+
+async function waitForScenarioObservedMessage(
+  context: WhatsAppQaMessageScenarioContext,
+  params: {
+    match: (message: WhatsAppQaDriverObservedMessage) => boolean;
+    observedAfter?: Date;
+    timeoutMs?: number;
+  },
+) {
+  const message = await context.driver.waitForMessage({
+    timeoutMs: params.timeoutMs ?? 45_000,
+    match: (candidate) =>
+      candidate.fromPhoneE164 === context.sutPhoneE164 &&
+      (!params.observedAfter ||
+        new Date(candidate.observedAt).getTime() >= params.observedAfter.getTime()) &&
+      params.match(candidate),
+  });
+  context.recordObservedMessage(message);
+  return message;
 }
 
 function isTransientWhatsAppQaDriverError(error: unknown) {
@@ -1171,16 +1774,24 @@ function matchesWhatsAppApprovalPendingText(params: {
 function matchesWhatsAppApprovalResolvedText(params: {
   approvalId: string;
   approvalKind: WhatsAppQaApprovalKind;
+  decision?: WhatsAppQaApprovalDecision;
   text: string;
 }) {
   const heading =
-    params.approvalKind === "exec" ? "Exec approval allow-once" : "Plugin approval allowed once";
+    params.decision === "deny"
+      ? params.approvalKind === "exec"
+        ? "Exec approval denied"
+        : "Plugin approval denied"
+      : params.approvalKind === "exec"
+        ? "Exec approval allow-once"
+        : "Plugin approval allowed once";
   return params.text.includes(params.approvalId) && params.text.includes(heading);
 }
 
 async function waitForWhatsAppApprovalMessage(params: {
   approvalId: string;
   approvalKind: WhatsAppQaApprovalKind;
+  decision?: WhatsAppQaApprovalDecision;
   driver: WhatsAppQaDriverSession;
   observedMessages: WhatsAppObservedMessage[];
   scenario: WhatsAppQaScenarioDefinition;
@@ -1206,6 +1817,7 @@ async function waitForWhatsAppApprovalMessage(params: {
           : matchesWhatsAppApprovalResolvedText({
               approvalId: params.approvalId,
               approvalKind: params.approvalKind,
+              decision: params.decision,
               text: message.text,
             }))
       );
@@ -1247,6 +1859,7 @@ async function runWhatsAppApprovalScenario(params: {
   const pending = await waitForWhatsAppApprovalMessage({
     approvalId,
     approvalKind: params.run.approvalKind,
+    decision: params.run.decision,
     driver: params.driver,
     observedMessages: params.observedMessages,
     scenario: params.scenario,
@@ -1258,6 +1871,7 @@ async function runWhatsAppApprovalScenario(params: {
   const resolvedPromise = waitForWhatsAppApprovalMessage({
     approvalId,
     approvalKind: params.run.approvalKind,
+    decision: params.run.decision,
     driver: params.driver,
     observedMessages: params.observedMessages,
     scenario: params.scenario,
@@ -1329,13 +1943,21 @@ async function runWhatsAppScenario(params: {
       ? params.groupJid!
       : params.sutPhoneE164;
   const allowFrom =
-    scenarioRun.kind === "approval" || scenarioRun.configMode === "allowlist"
+    scenarioRun.kind === "approval"
       ? [params.driverPhoneE164]
-      : ["+15550000000"];
+      : scenarioRun.configMode === "open"
+        ? ["*"]
+        : scenarioRun.configMode === "pairing"
+          ? ["+15550000000"]
+          : [params.driverPhoneE164];
   const dmPolicy =
-    scenarioRun.kind === "approval" || scenarioRun.configMode === "allowlist"
+    scenarioRun.kind === "approval"
       ? "allowlist"
-      : "pairing";
+      : scenarioRun.configMode === "open" || scenarioRun.configMode === "disabled"
+        ? scenarioRun.configMode
+        : scenarioRun.configMode === "allowlist"
+          ? "allowlist"
+          : "pairing";
   const gatewayHarness = await startQaLiveLaneGateway({
     repoRoot: params.repoRoot,
     transport: {
@@ -1398,7 +2020,19 @@ async function runWhatsAppScenario(params: {
     }
     if (scenarioRun.quietInput) {
       const quietStartedAt = new Date();
-      await params.driver.sendText(target, scenarioRun.quietInput);
+      if (scenarioRun.sendMode?.kind === "media") {
+        await params.driver.sendMedia(
+          target,
+          scenarioRun.quietInput,
+          scenarioRun.sendMode.mediaBuffer,
+          scenarioRun.sendMode.mediaType,
+          {
+            fileName: scenarioRun.sendMode.fileName,
+          },
+        );
+      } else {
+        await params.driver.sendText(target, scenarioRun.quietInput);
+      }
       await new Promise((resolve) => {
         setTimeout(resolve, scenarioRun.quietWindowMs ?? 5_000);
       });
@@ -1433,6 +2067,17 @@ async function runWhatsAppScenario(params: {
     const scenarioContext: WhatsAppQaMessageScenarioContext = {
       driver: params.driver,
       gateway: gatewayHarness.gateway,
+      gatewayWorkspaceDir: gatewayHarness.gateway.workspaceDir,
+      recordObservedMessage: (message) => {
+        params.observedMessages.push({
+          ...message,
+          matchedScenario: true,
+          scenarioId: params.scenario.id,
+          scenarioTitle: params.scenario.title,
+        });
+      },
+      scenarioId: params.scenario.id,
+      scenarioTitle: params.scenario.title,
       sent,
       sutAccountId: params.sutAccountId,
       sutPhoneE164: params.sutPhoneE164,

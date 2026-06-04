@@ -425,6 +425,60 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("sends contacts for QA structured inbound coverage", async () => {
+    const res = await api.sendContact("+1555", {
+      displayName: "QA Contact",
+      vcard: "BEGIN:VCARD\nVERSION:3.0\nFN:QA Contact\nEND:VCARD",
+    });
+
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expect(requireSendContent().contacts).toEqual({
+      displayName: "QA Contact",
+      contacts: [
+        {
+          displayName: "QA Contact",
+          vcard: "BEGIN:VCARD\nVERSION:3.0\nFN:QA Contact\nEND:VCARD",
+        },
+      ],
+    });
+    expect(res.messageId).toBe("msg-1");
+    expect(recordChannelActivity).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId: "main",
+      direction: "outbound",
+    });
+  });
+
+  it("sends locations for QA structured inbound coverage", async () => {
+    const res = await api.sendLocation("+1555", {
+      address: "1 Market St",
+      degreesLatitude: 37.7749,
+      degreesLongitude: -122.4194,
+      name: "QA Location",
+    });
+
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expect(requireSendContent().location).toEqual({
+      address: "1 Market St",
+      degreesLatitude: 37.7749,
+      degreesLongitude: -122.4194,
+      name: "QA Location",
+    });
+    expect(res.messageId).toBe("msg-1");
+  });
+
+  it("sends stickers for QA structured inbound coverage", async () => {
+    const sticker = Buffer.from("webp");
+    const res = await api.sendSticker("+1555", sticker, { mimetype: "image/webp" });
+
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expectSendContentFields(0, {
+      sticker,
+      mimetype: "image/webp",
+    });
+    expect(res.messageId).toBe("msg-1");
+  });
+
   it("sends reactions with participant JID normalization", async () => {
     const res = await api.sendReaction("+1555", "msg-2", "👍", false, "+1999");
     expectFirstSendJid("1555@s.whatsapp.net");

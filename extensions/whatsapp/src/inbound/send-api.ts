@@ -170,6 +170,46 @@ export function createWebSendApi(params: {
       recordWhatsAppOutbound(params.defaultAccountId);
       return normalizeWhatsAppSendResult(result, "poll");
     },
+    sendContact: async (
+      to: string,
+      contact: { displayName: string; vcard: string },
+    ): Promise<WhatsAppSendResult> => {
+      const jid = resolveOutboundJid(to);
+      const result = await params.sock.sendMessage(jid, {
+        contacts: {
+          displayName: contact.displayName,
+          contacts: [
+            {
+              displayName: contact.displayName,
+              vcard: contact.vcard,
+            },
+          ],
+        },
+      } as AnyMessageContent);
+      recordWhatsAppOutbound(params.defaultAccountId);
+      return normalizeWhatsAppSendResult(result, "text");
+    },
+    sendLocation: async (
+      to: string,
+      location: {
+        address?: string;
+        degreesLatitude: number;
+        degreesLongitude: number;
+        name?: string;
+      },
+    ): Promise<WhatsAppSendResult> => {
+      const jid = resolveOutboundJid(to);
+      const result = await params.sock.sendMessage(jid, {
+        location: {
+          degreesLatitude: location.degreesLatitude,
+          degreesLongitude: location.degreesLongitude,
+          name: location.name,
+          address: location.address,
+        },
+      } as AnyMessageContent);
+      recordWhatsAppOutbound(params.defaultAccountId);
+      return normalizeWhatsAppSendResult(result, "text");
+    },
     sendReaction: async (
       chatJid: string,
       messageId: string,
@@ -199,6 +239,19 @@ export function createWebSendApi(params: {
         return;
       }
       await params.sock.sendPresenceUpdate("composing", jid);
+    },
+    sendSticker: async (
+      to: string,
+      stickerBuffer: Buffer,
+      options?: { mimetype?: string },
+    ): Promise<WhatsAppSendResult> => {
+      const jid = resolveOutboundJid(to);
+      const result = await params.sock.sendMessage(jid, {
+        sticker: stickerBuffer,
+        mimetype: options?.mimetype ?? "image/webp",
+      } as AnyMessageContent);
+      recordWhatsAppOutbound(params.defaultAccountId);
+      return normalizeWhatsAppSendResult(result, "media");
     },
   } as const;
 }

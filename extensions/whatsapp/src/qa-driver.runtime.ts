@@ -60,6 +60,19 @@ export type WhatsAppQaDriverSendReactionOptions = {
 export type WhatsAppQaDriverSession = {
   close: () => Promise<void>;
   getObservedMessages: () => WhatsAppQaDriverObservedMessage[];
+  sendContact: (
+    to: string,
+    contact: { displayName: string; vcard: string },
+  ) => Promise<{ messageId?: string }>;
+  sendLocation: (
+    to: string,
+    location: {
+      address?: string;
+      degreesLatitude: number;
+      degreesLongitude: number;
+      name?: string;
+    },
+  ) => Promise<{ messageId?: string }>;
   sendMedia: (
     to: string,
     text: string,
@@ -76,6 +89,11 @@ export type WhatsAppQaDriverSession = {
     messageId: string,
     emoji: string,
     options: WhatsAppQaDriverSendReactionOptions,
+  ) => Promise<{ messageId?: string }>;
+  sendSticker: (
+    to: string,
+    stickerBuffer: Buffer,
+    options?: { mimetype?: string },
   ) => Promise<{ messageId?: string }>;
   sendText: (
     to: string,
@@ -366,6 +384,18 @@ export async function startWhatsAppQaDriverSession(params: {
     getObservedMessages() {
       return [...observedMessages];
     },
+    async sendContact(to, contact) {
+      const result = await sendApi.sendContact(to, contact);
+      return {
+        messageId: result.messageId,
+      };
+    },
+    async sendLocation(to, location) {
+      const result = await sendApi.sendLocation(to, location);
+      return {
+        messageId: result.messageId,
+      };
+    },
     async sendMedia(to, text, mediaBuffer, mediaType, options) {
       const result = await sendApi.sendMessage(to, text, mediaBuffer, mediaType, options);
       return {
@@ -386,6 +416,12 @@ export async function startWhatsAppQaDriverSession(params: {
         options.fromMe,
         options.participant,
       );
+      return {
+        messageId: result.messageId,
+      };
+    },
+    async sendSticker(to, stickerBuffer, options) {
+      const result = await sendApi.sendSticker(to, stickerBuffer, options);
       return {
         messageId: result.messageId,
       };

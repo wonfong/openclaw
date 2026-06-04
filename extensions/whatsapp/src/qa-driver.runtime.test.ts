@@ -6,9 +6,12 @@ import { startWhatsAppQaDriverSession } from "./qa-driver.runtime.js";
 const mocks = vi.hoisted(() => ({
   createWaSocket: vi.fn(),
   jidToE164: vi.fn(),
+  sendContact: vi.fn(),
+  sendLocation: vi.fn(),
   sendPoll: vi.fn(),
   sendReaction: vi.fn(),
   sendMessage: vi.fn(),
+  sendSticker: vi.fn(),
   waitForWaConnection: vi.fn(),
 }));
 
@@ -23,9 +26,12 @@ vi.mock("./text-runtime.js", () => ({
 
 vi.mock("./inbound/send-api.js", () => ({
   createWebSendApi: () => ({
+    sendContact: mocks.sendContact,
+    sendLocation: mocks.sendLocation,
     sendMessage: mocks.sendMessage,
     sendPoll: mocks.sendPoll,
     sendReaction: mocks.sendReaction,
+    sendSticker: mocks.sendSticker,
   }),
 }));
 
@@ -275,6 +281,9 @@ describe("startWhatsAppQaDriverSession", () => {
     mocks.sendMessage.mockResolvedValue({ messageId: "send-1" });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
     mocks.sendReaction.mockResolvedValue({ messageId: "reaction-send-1" });
+    mocks.sendContact.mockResolvedValue({ messageId: "contact-1" });
+    mocks.sendLocation.mockResolvedValue({ messageId: "location-1" });
+    mocks.sendSticker.mockResolvedValue({ messageId: "sticker-1" });
 
     const session = await startWhatsAppQaDriverSession({
       authDir: "/tmp/openclaw-whatsapp-auth",
@@ -296,6 +305,22 @@ describe("startWhatsAppQaDriverSession", () => {
         fromMe: true,
       }),
     ).resolves.toEqual({ messageId: "reaction-send-1" });
+    await expect(
+      session.sendContact("15551234567", {
+        displayName: "QA Contact",
+        vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
+      }),
+    ).resolves.toEqual({ messageId: "contact-1" });
+    await expect(
+      session.sendLocation("15551234567", {
+        degreesLatitude: 37.7749,
+        degreesLongitude: -122.4194,
+        name: "QA Location",
+      }),
+    ).resolves.toEqual({ messageId: "location-1" });
+    await expect(
+      session.sendSticker("15551234567", Buffer.from("webp"), { mimetype: "image/webp" }),
+    ).resolves.toEqual({ messageId: "sticker-1" });
 
     expect(mocks.sendMessage).toHaveBeenCalledWith(
       "15551234567",
@@ -315,6 +340,18 @@ describe("startWhatsAppQaDriverSession", () => {
       true,
       undefined,
     );
+    expect(mocks.sendContact).toHaveBeenCalledWith("15551234567", {
+      displayName: "QA Contact",
+      vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
+    });
+    expect(mocks.sendLocation).toHaveBeenCalledWith("15551234567", {
+      degreesLatitude: 37.7749,
+      degreesLongitude: -122.4194,
+      name: "QA Location",
+    });
+    expect(mocks.sendSticker).toHaveBeenCalledWith("15551234567", Buffer.from("webp"), {
+      mimetype: "image/webp",
+    });
 
     await session.close();
   });
