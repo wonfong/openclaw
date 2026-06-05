@@ -715,9 +715,10 @@ Scenarios (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime
 - `whatsapp-reply-to-message` - opt-in reply-to scenario. Enables
   `replyToMode=all` and verifies the SUT WhatsApp reply quotes the triggering
   driver message.
-- `whatsapp-group-allowlist-block` - opt-in group access-control scenario.
-  Requires `OPENCLAW_QA_WHATSAPP_GROUP_JID` and verifies a group outside the
-  configured allowlist stays quiet.
+- `whatsapp-group-allowlist-block` - default standard group access-control
+  scenario when a WhatsApp QA group is configured. Requires
+  `OPENCLAW_QA_WHATSAPP_GROUP_JID` and verifies a group outside the configured
+  allowlist stays quiet.
 - `whatsapp-approval-exec-native` - opt-in native WhatsApp exec approval
   scenario. Requests an exec approval through the gateway, verifies the
   WhatsApp message has native reaction approval affordances, resolves it, and
