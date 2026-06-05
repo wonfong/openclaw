@@ -241,30 +241,50 @@ describe("WhatsApp QA live runtime", () => {
         if (run.kind === "approval") {
           throw new Error(`${scenario.id} unexpectedly built an approval run`);
         }
-        return [scenario.id, run.input, String(run.matchText)] as const;
+        return [
+          scenario.id,
+          run.input,
+          String(run.matchText),
+          run.expectedJoinedSutTextIncludes,
+          run.expectedSutMessageCountRange,
+        ] as const;
       }),
     ).toEqual([
       [
         "whatsapp-commands-command",
         "/commands",
-        "/(?=.*Commands \\()(?=.*\\/session)(?=.*\\/verbose)/isu",
+        "/Commands \\(|\\/session|\\/verbose/iu",
+        ["/session", "/verbose"],
+        undefined,
       ],
       [
         "whatsapp-tools-compact-command",
         "/tools compact",
-        "/(?=.*Available tools)(?=.*exec)(?=.*Use \\/tools verbose for descriptions)/isu",
+        "/Available tools|exec|Use \\/tools verbose for descriptions/iu",
+        ["exec", "Use /tools verbose for descriptions"],
+        undefined,
       ],
       [
         "whatsapp-whoami-command",
         "/whoami",
         "/(?=.*Identity)(?=.*Channel: whatsapp)(?=.*AllowFrom:)/isu",
+        undefined,
+        undefined,
       ],
       [
         "whatsapp-context-command",
         "/context list",
         "/(?=.*Context breakdown)(?=.*Workspace:)(?=.*Tool schemas)/isu",
+        undefined,
+        undefined,
       ],
-      ["whatsapp-tool-only-usage-footer", "/usage tokens", "/Usage footer: tokens/iu"],
+      [
+        "whatsapp-tool-only-usage-footer",
+        "/usage tokens",
+        "/Usage footer: tokens/iu",
+        undefined,
+        undefined,
+      ],
     ]);
     expect(scenarios.map((scenario) => scenario.defaultProviderModes)).toEqual([
       ["mock-openai"],
@@ -545,7 +565,7 @@ describe("WhatsApp QA live runtime", () => {
       testing.isTransientWhatsAppQaDriverError(
         new Error("timed out waiting for WhatsApp QA driver message"),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(testing.isTransientWhatsAppQaDriverError(new Error("timed out waiting"))).toBe(false);
   });
 });

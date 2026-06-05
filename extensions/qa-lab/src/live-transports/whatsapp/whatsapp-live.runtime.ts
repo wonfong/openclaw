@@ -106,6 +106,7 @@ type WhatsAppQaMessageScenarioContext = {
   gateway: WhatsAppQaGateway;
   gatewayWorkspaceDir: string;
   recordObservedMessage: (message: WhatsAppQaDriverObservedMessage) => void;
+  requestStartedAt: Date;
   scenarioId: WhatsAppQaScenarioId;
   scenarioTitle: string;
   sent: { messageId?: string };
@@ -418,11 +419,13 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
         afterReply: async (_reply, context) => {
           await context.gateway.restart();
           await context.waitForReady();
+          const secondStartedAt = new Date();
           await context.driver.sendText(
             context.target,
             `After the restart, reply with only this exact marker: ${secondToken}`,
           );
           await context.driver.waitForMessage({
+            observedAfter: secondStartedAt,
             timeoutMs: 60_000,
             match: (message) =>
               message.fromPhoneE164 === context.sutPhoneE164 && message.text.includes(secondToken),
@@ -470,8 +473,10 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
     buildRun: () => ({
       configMode: "allowlist",
       expectReply: true,
+      expectedJoinedSutTextIncludes: ["/session", "/verbose"],
       input: "/commands",
-      matchText: /(?=.*Commands \()(?=.*\/session)(?=.*\/verbose)/isu,
+      matchText: /Commands \(|\/session|\/verbose/iu,
+      settleMs: 4_000,
       target: "dm",
     }),
   },
@@ -483,8 +488,10 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
     buildRun: () => ({
       configMode: "allowlist",
       expectReply: true,
+      expectedJoinedSutTextIncludes: ["exec", "Use /tools verbose for descriptions"],
       input: "/tools compact",
-      matchText: /(?=.*Available tools)(?=.*exec)(?=.*Use \/tools verbose for descriptions)/isu,
+      matchText: /Available tools|exec|Use \/tools verbose for descriptions/iu,
+      settleMs: 4_000,
       target: "dm",
     }),
   },
@@ -523,11 +530,13 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
       const token = `WHATSAPP_QA_USAGE_FOOTER_${randomUUID().slice(0, 8).toUpperCase()}`;
       return {
         afterReply: async (_reply, context) => {
+          const usageStartedAt = new Date();
           await context.driver.sendText(
             context.target,
             `Reply with only this exact marker after usage footer setup: ${token}`,
           );
           const usageReply = await context.driver.waitForMessage({
+            observedAfter: usageStartedAt,
             timeoutMs: 60_000,
             match: (message) =>
               message.fromPhoneE164 === context.sutPhoneE164 &&
@@ -913,6 +922,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
       return {
         afterReply: async (_reply, context) => {
           const documentToken = `${token}_DOCUMENT`;
+          const documentStartedAt = new Date();
           await context.driver.sendMedia(
             context.target,
             `Reply with only this exact marker after reading the document caption: ${documentToken}`,
@@ -921,6 +931,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
             { fileName: "whatsapp-qa-document.pdf" },
           );
           const documentReply = await context.driver.waitForMessage({
+            observedAfter: documentStartedAt,
             timeoutMs: 60_000,
             match: (message) =>
               message.fromPhoneE164 === context.sutPhoneE164 &&
@@ -929,11 +940,13 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
           context.recordObservedMessage(documentReply);
 
           const pollToken = `${token}_POLL`;
+          const pollStartedAt = new Date();
           await context.driver.sendPoll(context.target, {
             question: `Reply with only this exact marker after seeing this poll: ${pollToken}`,
             options: ["yes", "no"],
           });
           const pollReply = await context.driver.waitForMessage({
+            observedAfter: pollStartedAt,
             timeoutMs: 60_000,
             match: (message) =>
               message.fromPhoneE164 === context.sutPhoneE164 && message.text.includes(pollToken),
@@ -945,12 +958,14 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
             vcard: "BEGIN:VCARD\nVERSION:3.0\nFN:WhatsApp QA Contact\nTEL:+15550101010\nEND:VCARD",
           });
           const locationToken = `${token}_LOCATION`;
+          const locationStartedAt = new Date();
           await context.driver.sendLocation(context.target, {
             degreesLatitude: 37.7749,
             degreesLongitude: -122.4194,
             name: `Reply with only this exact marker after seeing this location: ${locationToken}`,
           });
           const locationReply = await context.driver.waitForMessage({
+            observedAfter: locationStartedAt,
             timeoutMs: 60_000,
             match: (message) =>
               message.fromPhoneE164 === context.sutPhoneE164 &&
@@ -1174,6 +1189,7 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
             throw new Error("WhatsApp driver did not return a triggering message id.");
           }
           const reaction = await context.driver.waitForMessage({
+            observedAfter: context.requestStartedAt,
             timeoutMs: 30_000,
             match: (message) => {
               const observedReaction = message.reaction;
@@ -1761,12 +1777,10 @@ async function waitForScenarioObservedMessage(
   },
 ) {
   const message = await context.driver.waitForMessage({
+    observedAfter: params.observedAfter,
     timeoutMs: params.timeoutMs ?? 45_000,
     match: (candidate) =>
-      candidate.fromPhoneE164 === context.sutPhoneE164 &&
-      (!params.observedAfter ||
-        new Date(candidate.observedAt).getTime() >= params.observedAfter.getTime()) &&
-      params.match(candidate),
+      candidate.fromPhoneE164 === context.sutPhoneE164 && params.match(candidate),
   });
   context.recordObservedMessage(message);
   return message;
@@ -1862,8 +1876,7 @@ function isTransientWhatsAppQaDriverError(error: unknown) {
   return (
     /\bConnection Closed\b/iu.test(message) ||
     /\bconflict\b/iu.test(message) ||
-    /\bsession conflict\b/iu.test(message) ||
-    /\btimed out waiting for WhatsApp QA driver message\b/iu.test(message)
+    /\bsession conflict\b/iu.test(message)
   );
 }
 
@@ -2077,6 +2090,7 @@ async function waitForWhatsAppApprovalMessage(params: {
   approvalKind: WhatsAppQaApprovalKind;
   decision?: WhatsAppQaApprovalDecision;
   driver: WhatsAppQaDriverSession;
+  observedAfter?: Date;
   observedMessages: WhatsAppObservedMessage[];
   scenario: WhatsAppQaScenarioDefinition;
   state: "pending" | "resolved";
@@ -2085,6 +2099,7 @@ async function waitForWhatsAppApprovalMessage(params: {
   token: string;
 }) {
   const reply = await params.driver.waitForMessage({
+    observedAfter: params.observedAfter,
     timeoutMs: params.timeoutMs,
     match: (message) => {
       const fromExpectedSender =
@@ -2145,6 +2160,7 @@ async function runWhatsAppApprovalScenario(params: {
     approvalKind: params.run.approvalKind,
     decision: params.run.decision,
     driver: params.driver,
+    observedAfter: requestStartedAt,
     observedMessages: params.observedMessages,
     scenario: params.scenario,
     state: "pending",
@@ -2157,6 +2173,7 @@ async function runWhatsAppApprovalScenario(params: {
     approvalKind: params.run.approvalKind,
     decision: params.run.decision,
     driver: params.driver,
+    observedAfter: requestStartedAt,
     observedMessages: params.observedMessages,
     scenario: params.scenario,
     state: "resolved",
@@ -2360,6 +2377,7 @@ async function runWhatsAppScenario(params: {
           scenarioTitle: params.scenario.title,
         });
       },
+      requestStartedAt,
       scenarioId: params.scenario.id,
       scenarioTitle: params.scenario.title,
       sent,
@@ -2398,6 +2416,7 @@ async function runWhatsAppScenario(params: {
       };
     }
     const reply = await params.driver.waitForMessage({
+      observedAfter: requestStartedAt,
       timeoutMs: params.scenario.timeoutMs,
       match: (message) =>
         (scenarioRun.target === "group"

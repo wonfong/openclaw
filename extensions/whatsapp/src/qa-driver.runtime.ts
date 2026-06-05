@@ -102,6 +102,7 @@ export type WhatsAppQaDriverSession = {
   ) => Promise<{ messageId?: string }>;
   waitForMessage: (params: {
     match: (message: WhatsAppQaDriverObservedMessage) => boolean;
+    observedAfter?: Date;
     timeoutMs: number;
   }) => Promise<WhatsAppQaDriverObservedMessage>;
 };
@@ -433,13 +434,17 @@ export async function startWhatsAppQaDriverSession(params: {
       };
     },
     async waitForMessage(paramsLocal) {
-      const existing = observedMessages.find(paramsLocal.match);
+      const predicate = (message: WhatsAppQaDriverObservedMessage) =>
+        (!paramsLocal.observedAfter ||
+          new Date(message.observedAt).getTime() >= paramsLocal.observedAfter.getTime()) &&
+        paramsLocal.match(message);
+      const existing = observedMessages.find(predicate);
       if (existing) {
         return existing;
       }
       return await new Promise<WhatsAppQaDriverObservedMessage>((resolve, reject) => {
         const waiter: Waiter = {
-          predicate: paramsLocal.match,
+          predicate,
           resolve,
           reject,
           timeout: setTimeout(() => {

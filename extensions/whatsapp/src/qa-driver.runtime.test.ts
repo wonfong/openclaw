@@ -45,11 +45,11 @@ function createMockSocket() {
   };
 }
 
-function incomingMessage(remoteJid: string, text: string): WAMessage {
+function incomingMessage(remoteJid: string, text: string, id = "message-1"): WAMessage {
   return {
     key: {
       fromMe: false,
-      id: "message-1",
+      id,
       remoteJid,
     },
     message: {
@@ -167,6 +167,43 @@ describe("startWhatsAppQaDriverSession", () => {
         text: "hello",
       },
     ]);
+
+    await session.close();
+  });
+
+  it("does not satisfy a wait with messages observed before the lower bound", async () => {
+    vi.useFakeTimers();
+    const sock = createMockSocket();
+    mocks.createWaSocket.mockResolvedValue(sock);
+    mocks.waitForWaConnection.mockResolvedValue(undefined);
+    mocks.jidToE164.mockReturnValue("+15551234567");
+
+    vi.setSystemTime(new Date("2026-06-04T23:42:32.036Z"));
+    const session = await startWhatsAppQaDriverSession({
+      authDir: "/tmp/openclaw-whatsapp-auth",
+    });
+
+    sock.ev.emit("messages.upsert", {
+      messages: [incomingMessage("12345@lid", "OpenClaw status stale", "stale-message")],
+    });
+
+    const observedAfter = new Date("2026-06-04T23:46:59.166Z");
+    vi.setSystemTime(observedAfter);
+    const waited = session.waitForMessage({
+      observedAfter,
+      timeoutMs: 1_000,
+      match: (message) => message.text.includes("OpenClaw status"),
+    });
+
+    vi.setSystemTime(new Date("2026-06-04T23:47:00.000Z"));
+    sock.ev.emit("messages.upsert", {
+      messages: [incomingMessage("12345@lid", "OpenClaw status fresh", "fresh-message")],
+    });
+
+    await expect(waited).resolves.toMatchObject({
+      messageId: "fresh-message",
+      text: "OpenClaw status fresh",
+    });
 
     await session.close();
   });
