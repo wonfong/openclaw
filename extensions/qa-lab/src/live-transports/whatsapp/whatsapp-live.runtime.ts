@@ -103,7 +103,9 @@ type WhatsAppQaMessageSendMode =
 
 type WhatsAppQaMessageScenarioContext = {
   driver: WhatsAppQaDriverSession;
+  driverPhoneE164: string;
   gateway: WhatsAppQaGateway;
+  gatewayTarget: string;
   gatewayWorkspaceDir: string;
   recordObservedMessage: (message: WhatsAppQaDriverObservedMessage) => void;
   requestStartedAt: Date;
@@ -115,6 +117,27 @@ type WhatsAppQaMessageScenarioContext = {
   target: string;
   waitForReady: () => Promise<void>;
 };
+
+function resolveWhatsAppQaMessageTargets(params: {
+  driverPhoneE164: string;
+  groupJid?: string;
+  scenarioTarget: "dm" | "group";
+  sutPhoneE164: string;
+}) {
+  if (params.scenarioTarget === "group") {
+    if (!params.groupJid) {
+      throw new Error("WhatsApp group scenario requires groupJid.");
+    }
+    return {
+      driverTarget: params.groupJid,
+      gatewayTarget: params.groupJid,
+    };
+  }
+  return {
+    driverTarget: params.sutPhoneE164,
+    gatewayTarget: params.driverPhoneE164,
+  };
+}
 
 type WhatsAppQaMessageScenarioRun = {
   afterReply?: (
@@ -872,7 +895,6 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
             params: {
               emoji: "👍",
               messageId: context.sent.messageId,
-              to: context.target,
             },
           });
           await waitForScenarioObservedMessage(context, {
@@ -892,7 +914,6 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
               caption: `${token}_UPLOAD`,
               contentType: "image/png",
               filename: "whatsapp-qa-upload.png",
-              to: context.target,
             },
           });
           await waitForScenarioObservedMessage(context, {
@@ -1711,7 +1732,7 @@ async function callWhatsAppGatewaySend(
       agentId: "main",
       channel: "whatsapp",
       idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
-      to: context.target,
+      to: context.gatewayTarget,
       ...(params.message !== undefined ? { message: params.message } : {}),
       ...(params.mediaUrl ? { mediaUrl: params.mediaUrl } : {}),
       ...(params.mediaUrls ? { mediaUrls: params.mediaUrls } : {}),
@@ -1741,7 +1762,7 @@ async function callWhatsAppGatewayPoll(
       maxSelections: params.maxSelections,
       options: params.options,
       question: params.question,
-      to: context.target,
+      to: context.gatewayTarget,
     },
     { timeoutMs: 60_000 },
   );
@@ -1762,7 +1783,10 @@ async function callWhatsAppGatewayMessageAction(
       action: params.action,
       channel: "whatsapp",
       idempotencyKey: buildWhatsAppQaIdempotencyKey(context.scenarioId, params.label),
-      params: params.params,
+      params: {
+        ...params.params,
+        to: context.gatewayTarget,
+      },
     },
     { timeoutMs: 60_000 },
   );
@@ -2239,10 +2263,16 @@ async function runWhatsAppScenario(params: {
   if (scenarioRun.kind !== "approval" && scenarioRun.target === "group" && !params.groupJid) {
     throw new Error(`WhatsApp scenario ${params.scenario.id} requires groupJid.`);
   }
-  const target =
-    scenarioRun.kind !== "approval" && scenarioRun.target === "group"
-      ? params.groupJid!
-      : params.sutPhoneE164;
+  const targets =
+    scenarioRun.kind !== "approval"
+      ? resolveWhatsAppQaMessageTargets({
+          driverPhoneE164: params.driverPhoneE164,
+          groupJid: params.groupJid,
+          scenarioTarget: scenarioRun.target,
+          sutPhoneE164: params.sutPhoneE164,
+        })
+      : undefined;
+  const target = targets?.driverTarget ?? params.sutPhoneE164;
   const allowFrom =
     scenarioRun.kind === "approval"
       ? [params.driverPhoneE164]
@@ -2367,7 +2397,9 @@ async function runWhatsAppScenario(params: {
         : await params.driver.sendText(target, scenarioRun.input);
     const scenarioContext: WhatsAppQaMessageScenarioContext = {
       driver: params.driver,
+      driverPhoneE164: params.driverPhoneE164,
       gateway: gatewayHarness.gateway,
+      gatewayTarget: targets?.gatewayTarget ?? params.driverPhoneE164,
       gatewayWorkspaceDir: gatewayHarness.gateway.workspaceDir,
       recordObservedMessage: (message) => {
         params.observedMessages.push({
@@ -2862,6 +2894,9 @@ export const testing = {
   assertSafeArchiveEntries,
   appendPreScenarioFailureResults,
   buildWhatsAppQaConfig,
+  callWhatsAppGatewayMessageAction,
+  callWhatsAppGatewayPoll,
+  callWhatsAppGatewaySend,
   createMissingGroupJidScenarioResult,
   findScenarios,
   fingerprintWhatsAppCredentialId: fingerprintQaCredentialId,
@@ -2869,6 +2904,7 @@ export const testing = {
   matchesWhatsAppApprovalResolvedText,
   parseWhatsAppQaCredentialPayload,
   renderWhatsAppQaMarkdown,
+  resolveWhatsAppQaMessageTargets,
   resolveWhatsAppQaRuntimeEnv,
   resolveWhatsAppMetadataRedaction,
   toObservedWhatsAppArtifacts,

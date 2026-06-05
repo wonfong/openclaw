@@ -21,6 +21,32 @@ async function createTgz(params: { entries: Record<string, string>; root: string
   return await fs.readFile(archivePath, "base64");
 }
 
+function createGatewayTargetContext(params: { gatewayTarget: string; target: string }) {
+  const calls: Array<{ method: string; payload: Record<string, unknown> }> = [];
+  const context = {
+    driver: {},
+    driverPhoneE164: "+15550000001",
+    gateway: {
+      call: async (method: string, payload: Record<string, unknown>) => {
+        calls.push({ method, payload });
+        return {};
+      },
+    },
+    gatewayTarget: params.gatewayTarget,
+    gatewayWorkspaceDir: "/tmp/openclaw-whatsapp-qa",
+    recordObservedMessage: () => {},
+    requestStartedAt: new Date("2026-06-05T00:00:00.000Z"),
+    scenarioId: "whatsapp-reply-context-isolation",
+    scenarioTitle: "WhatsApp fresh gateway send does not reuse prior quote context",
+    sent: { messageId: "driver-message-1" },
+    sutAccountId: "sut",
+    sutPhoneE164: "+15550000002",
+    target: params.target,
+    waitForReady: async () => {},
+  } as unknown as Parameters<typeof testing.callWhatsAppGatewaySend>[0];
+  return { calls, context };
+}
+
 describe("WhatsApp QA live runtime", () => {
   it("parses credential payloads and normalizes phone numbers", () => {
     const payload = testing.parseWhatsAppQaCredentialPayload({
@@ -170,6 +196,65 @@ describe("WhatsApp QA live runtime", () => {
       "reaction-observation",
       "allowlist-block",
     ]);
+  });
+
+  it("uses opposite DM peers for driver sends and Gateway sends", () => {
+    expect(
+      testing.resolveWhatsAppQaMessageTargets({
+        driverPhoneE164: "+15550000001",
+        scenarioTarget: "dm",
+        sutPhoneE164: "+15550000002",
+      }),
+    ).toEqual({
+      driverTarget: "+15550000002",
+      gatewayTarget: "+15550000001",
+    });
+    expect(
+      testing.resolveWhatsAppQaMessageTargets({
+        driverPhoneE164: "+15550000001",
+        groupJid: "120363000000000000@g.us",
+        scenarioTarget: "group",
+        sutPhoneE164: "+15550000002",
+      }),
+    ).toEqual({
+      driverTarget: "120363000000000000@g.us",
+      gatewayTarget: "120363000000000000@g.us",
+    });
+  });
+
+  it("routes WhatsApp Gateway DM helper calls to the driver peer", async () => {
+    const { calls, context } = createGatewayTargetContext({
+      gatewayTarget: "+15550000001",
+      target: "+15550000002",
+    });
+
+    await testing.callWhatsAppGatewaySend(context, {
+      label: "quoted",
+      message: "WHATSAPP_QA_QUOTED",
+      replyToId: "driver-message-1",
+    });
+    await testing.callWhatsAppGatewayPoll(context, {
+      label: "poll",
+      options: ["alpha", "beta"],
+      question: "WHATSAPP_QA_POLL",
+    });
+    await testing.callWhatsAppGatewayMessageAction(context, {
+      action: "react",
+      label: "react",
+      params: {
+        emoji: "👍",
+        messageId: "driver-message-1",
+      },
+    });
+
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.payload).toMatchObject({ to: "+15550000001" });
+    expect(calls[1]?.payload).toMatchObject({ to: "+15550000001" });
+    expect(calls[2]?.payload.params).toMatchObject({
+      emoji: "👍",
+      messageId: "driver-message-1",
+      to: "+15550000001",
+    });
   });
 
   it("keeps mock-backed and native approval scenarios out of default live-frontier selection", () => {
