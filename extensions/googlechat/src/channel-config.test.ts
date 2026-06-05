@@ -148,7 +148,7 @@ describe("googlechatPlugin config adapter", () => {
     };
     const structuredPayload: ReplyPayload = {
       text: `/approve ${approvalId.slice(0, 8)} allow-once`,
-      presentation: { kind: "card" },
+      presentation: { blocks: [] },
     };
 
     expect(
