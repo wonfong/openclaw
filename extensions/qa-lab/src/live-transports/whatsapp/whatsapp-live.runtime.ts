@@ -625,9 +625,17 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
           });
           await waitForScenarioObservedMessage(context, {
             observedAfter: quotedStartedAt,
-            match: (message) =>
-              message.text.includes(`${token}_QUOTED`) &&
-              message.quoted?.messageId === context.sent.messageId,
+            diagnosticChecks: [
+              {
+                label: "textMarker",
+                match: (message) => message.text.includes(`${token}_QUOTED`),
+              },
+              {
+                label: "quotedMessageIdMatchesTrigger",
+                match: (message) => message.quoted?.messageId === context.sent.messageId,
+              },
+            ],
+            match: (message) => message.text.includes(`${token}_QUOTED`),
           });
 
           const freshStartedAt = new Date();
@@ -1130,6 +1138,16 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
           });
           const firstChunk = await waitForScenarioObservedMessage(context, {
             observedAfter: chunkStartedAt,
+            diagnosticChecks: [
+              {
+                label: "longBeginMarker",
+                match: (message) => message.text.includes(`${token}_LONG_BEGIN`),
+              },
+              {
+                label: "quotedMessageIdMatchesTrigger",
+                match: (message) => message.quoted?.messageId === context.sent.messageId,
+              },
+            ],
             match: (message) =>
               message.text.includes(`${token}_LONG_BEGIN`) &&
               message.quoted?.messageId === context.sent.messageId,
@@ -1795,19 +1813,86 @@ async function callWhatsAppGatewayMessageAction(
 async function waitForScenarioObservedMessage(
   context: WhatsAppQaMessageScenarioContext,
   params: {
+    diagnosticChecks?: Array<{
+      label: string;
+      match: (message: WhatsAppQaDriverObservedMessage) => boolean;
+    }>;
     match: (message: WhatsAppQaDriverObservedMessage) => boolean;
     observedAfter?: Date;
     timeoutMs?: number;
   },
 ) {
-  const message = await context.driver.waitForMessage({
-    observedAfter: params.observedAfter,
-    timeoutMs: params.timeoutMs ?? 45_000,
-    match: (candidate) =>
-      candidate.fromPhoneE164 === context.sutPhoneE164 && params.match(candidate),
-  });
+  let message: WhatsAppQaDriverObservedMessage;
+  try {
+    message = await context.driver.waitForMessage({
+      observedAfter: params.observedAfter,
+      timeoutMs: params.timeoutMs ?? 45_000,
+      match: (candidate) =>
+        candidate.fromPhoneE164 === context.sutPhoneE164 && params.match(candidate),
+    });
+  } catch (error) {
+    if (/\btimed out waiting for WhatsApp QA driver message\b/iu.test(formatErrorMessage(error))) {
+      throw new Error(
+        `${formatErrorMessage(error)}; ${formatWhatsAppScenarioWaitDiagnostics(context, {
+          diagnosticChecks: params.diagnosticChecks,
+          observedAfter: params.observedAfter,
+        })}`,
+      );
+    }
+    throw error;
+  }
   context.recordObservedMessage(message);
   return message;
+}
+
+function formatDiagnosticId(value: string | undefined | null) {
+  return value ? `present(length=${value.length})` : "missing";
+}
+
+function formatWhatsAppScenarioWaitDiagnostics(
+  context: WhatsAppQaMessageScenarioContext,
+  params: {
+    diagnosticChecks?: Array<{
+      label: string;
+      match: (message: WhatsAppQaDriverObservedMessage) => boolean;
+    }>;
+    observedAfter?: Date;
+  },
+) {
+  const lowerBoundMs = params.observedAfter?.getTime();
+  const messages = context.driver.getObservedMessages().filter((message) => {
+    if (lowerBoundMs === undefined) {
+      return true;
+    }
+    return new Date(message.observedAt).getTime() >= lowerBoundMs;
+  });
+  if (messages.length === 0) {
+    return "observed 0 WhatsApp driver message(s) after wait lower bound";
+  }
+  const formatted = messages.slice(-5).map((message, index) => {
+    const checks = (params.diagnosticChecks ?? []).map((check) => {
+      let matched = false;
+      try {
+        matched = check.match(message);
+      } catch {
+        matched = false;
+      }
+      return `${check.label}=${matched ? "yes" : "no"}`;
+    });
+    return [
+      `#${index + 1}`,
+      `observedAt=${message.observedAt}`,
+      `fromExpectedSut=${message.fromPhoneE164 === context.sutPhoneE164 ? "yes" : "no"}`,
+      `fromPhone=${message.fromPhoneE164 ? "present" : "missing"}`,
+      `kind=${message.kind}`,
+      `textLength=${message.text.length}`,
+      `messageId=${formatDiagnosticId(message.messageId)}`,
+      `quoted=${message.quoted ? "present" : "missing"}`,
+      `quotedMessageId=${formatDiagnosticId(message.quoted?.messageId)}`,
+      ...checks,
+    ].join(" ");
+  });
+  return `observed ${messages.length} WhatsApp driver message(s) after wait lower bound: ${formatted.join("; ")}`;
 }
 
 function hasWhatsAppBatchExpectations(run: WhatsAppQaMessageScenarioRun) {
@@ -2900,6 +2985,7 @@ export const testing = {
   createMissingGroupJidScenarioResult,
   findScenarios,
   fingerprintWhatsAppCredentialId: fingerprintQaCredentialId,
+  formatWhatsAppScenarioWaitDiagnostics,
   isTransientWhatsAppQaDriverError,
   matchesWhatsAppApprovalResolvedText,
   parseWhatsAppQaCredentialPayload,

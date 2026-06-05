@@ -47,6 +47,24 @@ function createGatewayTargetContext(params: { gatewayTarget: string; target: str
   return { calls, context };
 }
 
+function createDiagnosticsContext(
+  messages: Array<{
+    fromPhoneE164: string | null;
+    kind: "media" | "poll" | "reaction" | "text" | "unknown";
+    messageId?: string;
+    observedAt: string;
+    quoted?: { messageId?: string; text?: string };
+    text: string;
+  }>,
+) {
+  return {
+    driver: {
+      getObservedMessages: () => messages,
+    },
+    sutPhoneE164: "+15550000002",
+  } as unknown as Parameters<typeof testing.formatWhatsAppScenarioWaitDiagnostics>[0];
+}
+
 describe("WhatsApp QA live runtime", () => {
   it("parses credential payloads and normalizes phone numbers", () => {
     const payload = testing.parseWhatsAppQaCredentialPayload({
@@ -255,6 +273,60 @@ describe("WhatsApp QA live runtime", () => {
       messageId: "driver-message-1",
       to: "+15550000001",
     });
+  });
+
+  it("formats redacted wait diagnostics for unmatched WhatsApp observations", () => {
+    const diagnostics = testing.formatWhatsAppScenarioWaitDiagnostics(
+      createDiagnosticsContext([
+        {
+          fromPhoneE164: "+15550000002",
+          kind: "text",
+          messageId: "before-lower-bound",
+          observedAt: "2026-06-05T00:59:59.000Z",
+          text: "SECRET_BEFORE",
+        },
+        {
+          fromPhoneE164: "+15550000002",
+          kind: "text",
+          messageId: "fresh-message-secret-id",
+          observedAt: "2026-06-05T01:00:01.000Z",
+          quoted: { messageId: "quoted-secret-id", text: "quoted secret body" },
+          text: "SECRET_MARKER",
+        },
+        {
+          fromPhoneE164: "+15550000003",
+          kind: "media",
+          messageId: "other-sender-secret-id",
+          observedAt: "2026-06-05T01:00:02.000Z",
+          text: "SECRET_OTHER",
+        },
+      ]),
+      {
+        diagnosticChecks: [
+          {
+            label: "textMarker",
+            match: (message) => message.text.includes("SECRET_MARKER"),
+          },
+          {
+            label: "quoteMatchesTrigger",
+            match: (message) => message.quoted?.messageId === "trigger-message",
+          },
+        ],
+        observedAfter: new Date("2026-06-05T01:00:00.000Z"),
+      },
+    );
+
+    expect(diagnostics).toContain("observed 2 WhatsApp driver message(s)");
+    expect(diagnostics).toContain("fromExpectedSut=yes");
+    expect(diagnostics).toContain("fromExpectedSut=no");
+    expect(diagnostics).toContain("textMarker=yes");
+    expect(diagnostics).toContain("quoteMatchesTrigger=no");
+    expect(diagnostics).toContain("quoted=present");
+    expect(diagnostics).toContain("quotedMessageId=present(length=16)");
+    expect(diagnostics).not.toContain("+15550000002");
+    expect(diagnostics).not.toContain("SECRET_MARKER");
+    expect(diagnostics).not.toContain("fresh-message-secret-id");
+    expect(diagnostics).not.toContain("quoted-secret-id");
   });
 
   it("keeps mock-backed and native approval scenarios out of default live-frontier selection", () => {
