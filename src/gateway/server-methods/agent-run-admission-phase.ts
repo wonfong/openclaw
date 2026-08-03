@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   clearEmbeddedAgentRunAbortabilityForRunId,
@@ -36,7 +35,6 @@ import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   isConfirmedAcpManualSpawnTaskOwner,
-  registerPluginSubagentRunFromGateway,
   resolveGatewayAgentTaskTrackingMode,
   type GatewayAgentTaskTrackingMode,
 } from "./agent-task-tracking.js";
@@ -53,6 +51,7 @@ export type PreparedAgentRunDispatch = {
   restoredCronContinuationLifecycleRevision?: string;
   lifecycleStorePath: string;
   resolvedThreadId?: string | number;
+  taskTrackingMode: GatewayAgentTaskTrackingMode;
   dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
   restoreAdmittedRestartRecoveryInterrupted?: () => Promise<
     MainSessionRecoveryPendingTarget | undefined
@@ -308,25 +307,8 @@ export async function prepareAgentRunDispatch(params: {
     }),
     modelRun: params.isOneShotModelRun,
   });
-  let dispatchTaskTrackingMode: PreparedAgentRunDispatch["dispatchTaskTrackingMode"] =
+  const dispatchTaskTrackingMode: PreparedAgentRunDispatch["dispatchTaskTrackingMode"] =
     taskTrackingMode === "cli" ? "cli" : "none";
-  if (taskTrackingMode === "plugin_subagent" && params.resolvedSessionKey) {
-    try {
-      await registerPluginSubagentRunFromGateway({
-        cfg: params.cfg,
-        runId: params.runId,
-        childSessionKey: params.resolvedSessionKey,
-        task: params.request.message.trim(),
-        requester: params.client?.internal?.pluginSubagentRequester,
-        pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
-      });
-    } catch (err) {
-      params.context.logGateway.warn(
-        `failed to register plugin subagent run ${params.runId}; falling back to cli task tracking: ${formatForLog(err)}`,
-      );
-      dispatchTaskTrackingMode = "cli";
-    }
-  }
   let restoreAdmittedRestartRecoveryInterrupted:
     | (() => Promise<MainSessionRecoveryPendingTarget | undefined>)
     | undefined;
@@ -432,6 +414,7 @@ export async function prepareAgentRunDispatch(params: {
     restoredCronContinuationLifecycleRevision: params.restoredCronContinuation?.lifecycleRevision,
     lifecycleStorePath,
     resolvedThreadId,
+    taskTrackingMode,
     dispatchTaskTrackingMode,
     restoreAdmittedRestartRecoveryInterrupted,
   };
